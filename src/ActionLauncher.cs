@@ -51,10 +51,7 @@ namespace MD301Plus
                 try
                 {
                     RingAction.ValidateLaunchTarget(target);
-                    Uri url;
-                    bool web = Uri.TryCreate(target, UriKind.Absolute, out url) &&
-                        (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps);
-                    if (!web && !exists(target))
+                    if (!RingAction.IsUriLaunchTarget(target) && !exists(target))
                         throw new FileNotFoundException("The launch target does not exist: " + target);
                     if (!disposed) launch(target);
                 }

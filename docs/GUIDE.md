@@ -349,7 +349,7 @@ button assignment. Only DPI/keyboard-mode triggers need a matching Gear Link map
 
 ### Native media and Windows controls
 
-Choose **Media** in the action palette for these eight native Windows keys:
+Choose **Media** in the action palette for seven native Windows keys and a Spotify launcher:
 
 | Action | Command |
 |---|---|
@@ -360,15 +360,20 @@ Choose **Media** in the action palette for these eight native Windows keys:
 | Volume down | `VolumeDown` |
 | Mute | `VolumeMute` |
 | Stop | `MediaStop` |
-| Open default media app | `MediaSelect` |
+| Spotify | `spotify:` (`launch`) |
 
-These are normal `shortcut` actions without modifiers. They control Windows
+The first seven are normal `shortcut` actions without modifiers. They control Windows
 volume and the active media session, rather than sending spacebar or a
 player-specific shortcut to the foreground app. Playback needs a player that
-handles Windows media keys; MediaSelect depends on an installed/default handler.
+handles Windows media keys. **Spotify** opens the installed Spotify app through
+its registered `spotify:` URI, rather than Windows' default media player.
+Spotify must be installed; a missing handler reports a launch error.
+Existing unchanged **Media app** preset actions are upgraded on load without
+moving ring positions or changing custom default-player shortcuts.
 Volume changes by the normal Windows media-key increment per activation.
 Aliases `PlayPause`, `NextTrack`, `PreviousTrack`, `PrevTrack`, `Mute`, `Stop`,
-and `LaunchMedia` are also accepted.
+and `LaunchMedia` are also accepted. `MediaSelect` (alias `LaunchMedia`) remains
+available for custom shortcuts that deliberately open Windows' default media app.
 
 The **Windows** preset provides Task view (`Win+Tab`), Desktop (`Win+D`),
 Explorer (`Win+E`), Settings (`Win+I`), Clipboard history (`Win+V`),
@@ -386,7 +391,8 @@ requirements still apply, such as enabling clipboard history.
   BrowserFavorites, BrowserHome, LaunchMail, LaunchApp1, and LaunchApp2 are
   supported too. A keyboard-mode trigger needs a modifier or a single function key.
 - `launch`: an absolute app/file/folder path such as
-  `C:\Windows\System32\notepad.exe`, or an HTTP(S) URL. There is no shell-command
+  `C:\Windows\System32\notepad.exe`, an HTTP(S) URL, or `spotify:` to open Spotify.
+  There is no shell-command
   interpreter or separate command-line-arguments field. Use only trusted local
   files and shortcuts.
 

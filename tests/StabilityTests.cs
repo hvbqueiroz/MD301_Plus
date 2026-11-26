@@ -336,6 +336,24 @@ namespace MD301Plus.Tests
                 PumpUntil(delegate { return completions == 3; }, "Invalid targets report a failure");
                 Check(failure is SettingsException && launched == 1, "Invalid targets cannot reach the shell worker");
             }
+            string spotifyTarget = null;
+            Exception spotifyFailure = null;
+            int spotifyCompletions = 0;
+            using (ActionLauncher launcher = new ActionLauncher(delegate(string target) { spotifyTarget = target; },
+                delegate(Exception error) { spotifyFailure = error; spotifyCompletions++; },
+                delegate { throw new TestFailure("Spotify must not be checked as a filesystem path"); }))
+            {
+                launcher.Open("spotify:");
+                PumpUntil(delegate { return spotifyCompletions == 1; }, "Spotify launch completes on the UI");
+                Check(spotifyTarget == "spotify:" && spotifyFailure == null, "Spotify's URI reaches the shell launcher");
+            }
+            using (ActionLauncher launcher = new ActionLauncher(delegate { throw new Win32Exception(1155); },
+                delegate(Exception error) { spotifyFailure = error; spotifyCompletions++; }))
+            {
+                launcher.Open("spotify:");
+                PumpUntil(delegate { return spotifyCompletions == 2; }, "Missing Spotify handler reports completion");
+                Check(spotifyFailure is Win32Exception, "Missing Spotify reports the launch error without opening another player");
+            }
             int late = 0;
             using (ManualResetEvent started = new ManualResetEvent(false))
             using (ManualResetEvent release = new ManualResetEvent(false))
@@ -386,6 +404,12 @@ namespace MD301Plus.Tests
         private static void TestStoreLaunchPolicy()
         {
             bool direct = false, desktop = false;
+            ShellLauncher.Open("spotify:", true, delegate(string target, int show)
+            {
+                desktop = target == "spotify:" && show == 1;
+            }, delegate { direct = true; });
+            Check(desktop && !direct, "Store Spotify launches use Explorer outside the private app profile");
+            desktop = false;
             ShellLauncher.Open("https://example.com/", true, delegate(string target, int show)
             {
                 desktop = target == "https://example.com/" && show == 1;

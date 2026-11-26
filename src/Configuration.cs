@@ -38,6 +38,11 @@ namespace MD301Plus
             return new RingAction { Label = "MD301 Plus settings", Kind = "settings", Command = "", Icon = "settings" };
         }
 
+        public static RingAction OpenSpotify()
+        {
+            return new RingAction { Label = "Spotify", Kind = "launch", Command = "spotify:", Icon = "launch" };
+        }
+
         public override string ToString()
         {
             return Label;
@@ -71,11 +76,8 @@ namespace MD301Plus
         public static void ValidateLaunchTarget(string target)
         {
             if (String.IsNullOrWhiteSpace(target) || target.Length > 2048)
-                throw new SettingsException("A launch target must be an absolute file/folder path or an HTTP(S) URL.");
-            Uri uri;
-            if (Uri.TryCreate(target, UriKind.Absolute, out uri) &&
-                (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp))
-                return;
+                throw new SettingsException("A launch target must be an absolute file/folder path, an HTTP(S) URL, or spotify:.");
+            if (IsUriLaunchTarget(target)) return;
             try
             {
                 string root = Path.GetPathRoot(target);
@@ -98,7 +100,15 @@ namespace MD301Plus
             {
                 throw new SettingsException("The launch path is too long.", ex);
             }
-            throw new SettingsException("Use an absolute file/folder path or an HTTP(S) URL, not a shell command.");
+            throw new SettingsException("Use an absolute file/folder path, an HTTP(S) URL, or spotify:, not a shell command.");
+        }
+
+        internal static bool IsUriLaunchTarget(string target)
+        {
+            if (string.Equals(target, "spotify:", StringComparison.OrdinalIgnoreCase)) return true;
+            Uri uri;
+            return Uri.TryCreate(target, UriKind.Absolute, out uri) &&
+                (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
         }
     }
 
@@ -157,7 +167,7 @@ namespace MD301Plus
                         Shortcut("Volume down", "VolumeDown", "volume-down"),
                         Shortcut("Mute", "VolumeMute", "mute"),
                         Shortcut("Stop", "MediaStop", "stop"),
-                        Shortcut("Media app", "MediaSelect", "launch")
+                        RingAction.OpenSpotify()
                     };
                 case "Windows":
                     return new List<RingAction>
@@ -285,6 +295,14 @@ namespace MD301Plus
                     if (settings == null)
                         throw new SettingsException("The settings file must contain an object.");
                     settings.Validate();
+                    for (int i = 0; i < settings.Actions.Count; i++)
+                    {
+                        RingAction action = settings.Actions[i];
+                        // Upgrade only the unchanged old preset, not custom default-player shortcuts.
+                        if (action.Label == "Media app" && action.Kind == "shortcut" &&
+                            action.Command == "MediaSelect" && action.Icon == "launch")
+                            settings.Actions[i] = RingAction.OpenSpotify();
+                    }
                     return settings;
                 }
             }

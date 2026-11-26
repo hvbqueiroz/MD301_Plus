@@ -285,10 +285,11 @@ namespace MD301Plus.Tests
             Throws<SettingsException>(bad.Validate, "Reject unsupported settings versions");
 
             foreach (string valid in new[] { @"C:\Windows\notepad.exe", @"C:\Program Files\Creative App\app.exe",
-                @"\\server\share\file.txt", "https://example.com/page?q=hello", "http://localhost:8000/" })
+                @"\\server\share\file.txt", "https://example.com/page?q=hello", "http://localhost:8000/", "spotify:", "SPOTIFY:" })
                 RingAction.ValidateLaunchTarget(valid);
             foreach (string invalid in new[] { "", "notepad.exe", @"C:relative.exe", @"\relative.exe",
-                "cmd.exe /c echo test", "javascript:alert(1)", "file:///C:/Windows/notepad.exe" })
+                "cmd.exe /c echo test", "javascript:alert(1)", "file:///C:/Windows/notepad.exe",
+                "spotify:arbitrary-command", "spotify://other", "unknown:" })
             {
                 string value = invalid;
                 Throws<SettingsException>(delegate { RingAction.ValidateLaunchTarget(value); }, "Reject unsafe/relative launch target: " + value);
@@ -308,6 +309,21 @@ namespace MD301Plus.Tests
             store.Save(loaded);
             Check(store.Load().Actions[2].Kind == "settings" && store.Load().Actions[2].Command == "",
                 "The built-in Settings shortcut persists without an installation-specific path");
+            RingSettings media = defaults.Copy();
+            media.Actions = RingSettings.Preset("Media");
+            media.Actions[2] = new RingAction { Label = "Media app", Kind = "shortcut", Command = "MediaSelect", Icon = "launch" };
+            media.Actions[4] = media.Actions[2].Copy();
+            media.Actions[4].Label = "My default player";
+            store.Save(media);
+            string legacyJson = File.ReadAllText(path);
+            RingSettings upgraded = store.Load();
+            Check(upgraded.Actions[2].Kind == "launch" && upgraded.Actions[2].Command == "spotify:" &&
+                upgraded.Actions[2].Label == "Spotify", "The old Media app preset opens Spotify in its saved ring position");
+            Check(upgraded.Actions[4].Kind == "shortcut" && upgraded.Actions[4].Command == "MediaSelect",
+                "Custom default-player shortcuts are not changed");
+            Check(File.ReadAllText(path) == legacyJson, "Loading the upgraded preset does not rewrite settings");
+            store.Save(upgraded);
+            Check(store.Load().Actions[2].Command == "spotify:", "The Spotify launcher persists after saving");
             RingAction invalidSettings = RingAction.OpenSettings();
             invalidSettings.Command = "unexpected";
             Throws<SettingsException>(delegate { invalidSettings.Validate(0); }, "Settings action rejects arbitrary commands");
@@ -464,6 +480,9 @@ namespace MD301Plus.Tests
                 settings.Validate();
                 Check(settings.Actions.Count == 8, "Exactly eight actions in " + name + " preset");
             }
+            RingAction spotify = RingSettings.Preset("Media")[7];
+            Check(spotify.Label == "Spotify" && spotify.Kind == "launch" && spotify.Command == "spotify:",
+                "The Media palette launches Spotify rather than Windows' default media player");
             Throws<SettingsException>(delegate { RingSettings.Preset("unknown"); }, "Unknown presets are rejected");
             Console.WriteLine("PASS: native Windows/media VK codes, aliases, balanced events and three eight-slot presets");
         }
