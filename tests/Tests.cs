@@ -811,23 +811,18 @@ namespace MD301Plus.Tests
                 CheckStartupFooter(form);
                 FlowLayoutPanel assignment = (FlowLayoutPanel)form.Controls.Find("ButtonAssignment", true)[0];
                 float displayScale = form.DeviceDpi / 96f;
-                Console.WriteLine("LAYOUT ORIGINAL: client " + form.ClientSize + ", screen " +
-                    Screen.FromControl(form).WorkingArea + ", layout " + layout.Bounds + ", padding " + layout.Padding);
-                // OnShown fits the window to the screen; CI may not have room for its full default height.
-                form.ClientSize = new Size((int)(1240 * displayScale), (int)(880 * displayScale));
+                // Size the layout directly: Windows caps native windows on small CI screens.
+                layout.Dock = DockStyle.None;
+                layout.Size = new Size((int)(1240 * displayScale), (int)(880 * displayScale));
                 Application.DoEvents();
-                Console.WriteLine("LAYOUT: client " + form.ClientSize + ", DPI " + form.DeviceDpi +
-                    ", autoscale " + form.CurrentAutoScaleDimensions + ", assignment " + assignment.ClientSize);
-                Console.WriteLine("LAYOUT ROOT: " + layout.Bounds + ", rows " + string.Join(", ", layout.GetRowHeights()) +
-                    ", assignment bounds " + assignment.Bounds + ", parent " + assignment.Parent.Bounds);
-                foreach (Control child in assignment.Controls)
-                    if (child.Visible) Console.WriteLine("LAYOUT CHILD: " + child.Text + " " + child.Bounds);
                 Check(!assignment.VerticalScroll.Visible, "Moving startup out of the button group removes its default-size scrollbar");
-                using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
+                CheckStartupFooter(form);
+                using (Bitmap image = new Bitmap(layout.Width, layout.Height))
                 {
-                    form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
+                    layout.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
                     image.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-preview.png"), ImageFormat.Png);
                 }
+                layout.Dock = DockStyle.Fill;
                 form.Size = new Size((int)(1040 * displayScale), (int)(720 * displayScale));
                 Application.DoEvents();
                 Rectangle editorBounds = ring.RectangleToScreen(ring.ClientRectangle);
