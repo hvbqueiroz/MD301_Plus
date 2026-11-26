@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace MD301Plus.Tests
 {
@@ -21,8 +22,9 @@ namespace MD301Plus.Tests
     internal sealed class BackgroundSettingsPreview : SettingsForm
     {
         internal BackgroundSettingsPreview(RingSettings settings, Action resume = null, bool paused = false,
-            Action<RingSettings> save = null, Action pause = null, Action<string> openLink = null)
-            : base(settings, save ?? delegate { }, delegate { }, pause, resume, paused, openLink) { }
+            Action<RingSettings> save = null, Action pause = null, Action<string> openLink = null,
+            StartupRegistration startupRegistration = null)
+            : base(settings, save ?? delegate { }, delegate { }, pause, resume, paused, openLink, startupRegistration) { }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams
         {
@@ -83,6 +85,7 @@ namespace MD301Plus.Tests
                 TestShortcuts();
                 TestApplicationIcon();
                 TestVersion();
+                TestStartupRegistration();
                 TestSettings(directory);
                 TestDiagnosticLog();
                 TestStability(directory);
@@ -137,6 +140,29 @@ namespace MD301Plus.Tests
             using (Icon executable = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
             using (Bitmap bitmap = executable.ToBitmap())
                 Check(bitmap.GetPixel(0, 0).A == 0, "Executable embeds the transparent mouse icon.");
+            foreach (int size in new[] { 16, 20, 24, 32, 48, 64, 128 })
+            using (Stream stream = typeof(RingApplication).Assembly.GetManifestResourceStream("MD301Plus.AppIcon"))
+            using (Icon frame = new Icon(stream, new Size(size, size)))
+            using (Bitmap bitmap = frame.ToBitmap())
+            {
+                Check(frame.Size == new Size(size, size) && bitmap.GetPixel(0, 0).A == 0,
+                    "D2 icon has a usable transparent native frame at " + size + " pixels");
+                int brass = 0, left = size, right = -1, top = size, bottom = -1;
+                for (int y = 0; y < size; y++)
+                    for (int x = 0; x < size; x++)
+                    {
+                        Color pixel = bitmap.GetPixel(x, y);
+                        if (pixel.A < 96) continue;
+                        left = Math.Min(left, x); right = Math.Max(right, x);
+                        top = Math.Min(top, y); bottom = Math.Max(bottom, y);
+                        if (pixel.R > pixel.G && pixel.G > pixel.B && pixel.R - pixel.B > 35) brass++;
+                    }
+                Check(brass > 0 && right - left > bottom - top,
+                    "D2 keeps its brass accent and angled mouse silhouette at " + size + " pixels");
+            }
+            using (Bitmap preview = new Bitmap(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon-preview.png")))
+                Check(preview.Size == new Size(256, 256) && preview.GetPixel(0, 0).A == 0,
+                    "The full-size D2 installer preview preserves transparent edges");
         }
 
         private static void TestVersion()
@@ -278,6 +304,13 @@ namespace MD301Plus.Tests
             loaded.Actions[1] = new RingAction { Label = "Website", Kind = "launch", Command = "https://example.com", Icon = "launch" };
             store.Save(loaded);
             Check(store.Load().Actions[1].Kind == "launch", "Atomic replacement stores launcher");
+            loaded.Actions[2] = RingAction.OpenSettings();
+            store.Save(loaded);
+            Check(store.Load().Actions[2].Kind == "settings" && store.Load().Actions[2].Command == "",
+                "The built-in Settings shortcut persists without an installation-specific path");
+            RingAction invalidSettings = RingAction.OpenSettings();
+            invalidSettings.Command = "unexpected";
+            Throws<SettingsException>(delegate { invalidSettings.Validate(0); }, "Settings action rejects arbitrary commands");
             RingSettings dpi = defaults.Copy();
             dpi.Trigger = "F8";
             dpi.Button = "dpi";
@@ -489,6 +522,46 @@ namespace MD301Plus.Tests
             double angle = (degreesFromTop - 90) * Math.PI / 180;
             return Point.Round(new PointF(geometry.Bounds.Left + geometry.Center.X + (float)(Math.Cos(angle) * radius),
                 geometry.Bounds.Top + geometry.Center.Y + (float)(Math.Sin(angle) * radius)));
+        }
+
+        private static void TestStartupRegistration()
+        {
+            string path = @"Software\MD301Plus.Tests\Startup-" + Guid.NewGuid().ToString("N");
+            string runPath = path + @"\Run", approvalPath = path + @"\Approval";
+            string executable = @"C:\Apps With Spaces\MD301Plus.exe";
+            StartupRegistration registration = new StartupRegistration(executable, runPath, approvalPath);
+            try
+            {
+                Check(!registration.IsEnabled(), "Missing startup registration is unchecked");
+                registration.SetEnabled(true);
+                using (RegistryKey run = Registry.CurrentUser.OpenSubKey(runPath))
+                    Check((string)run.GetValue(AppInfo.Name) == "\"" + executable + "\" --startup",
+                        "Startup quotes the executable and launches quietly");
+                using (BackgroundSettingsPreview form = new BackgroundSettingsPreview(
+                    RingSettings.CreateDefault(), startupRegistration: registration))
+                {
+                    CheckBox checkbox = (CheckBox)form.Controls.Find("StartWithWindows", true)[0];
+                    Check(checkbox.Checked, "The startup checkbox reflects existing installer registration");
+                    checkbox.Checked = false;
+                    Check(!registration.IsEnabled(), "Unchecking startup applies without saving the ring");
+                    checkbox.Checked = true;
+                    Check(registration.IsEnabled(), "Checking startup applies without saving the ring");
+                }
+                using (RegistryKey approval = Registry.CurrentUser.CreateSubKey(approvalPath))
+                    approval.SetValue(AppInfo.Name, new byte[] { 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                        RegistryValueKind.Binary);
+                Check(!registration.IsEnabled(), "Windows' disabled override is reflected in startup state");
+                Throws<InvalidOperationException>(delegate { registration.SetEnabled(true); },
+                    "Enabling cannot bypass Windows' Startup Apps permission");
+                registration.SetEnabled(false);
+                registration.SetEnabled(false);
+                using (RegistryKey run = Registry.CurrentUser.OpenSubKey(runPath))
+                    Check(run.GetValue(AppInfo.Name) == null, "Disabling removes the Run entry and is idempotent");
+                using (RegistryKey approval = Registry.CurrentUser.OpenSubKey(approvalPath))
+                    Check(((byte[])approval.GetValue(AppInfo.Name))[0] == 3, "Startup permission remains untouched");
+            }
+            finally { Registry.CurrentUser.DeleteSubKeyTree(path, false); }
+            Console.WriteLine("PASS: startup checkbox, quiet command, immediate persistence and Windows permission");
         }
 
         private static void TestDiagnosticLog()
@@ -720,6 +793,12 @@ namespace MD301Plus.Tests
                 Application.DoEvents();
                 ActionPalette palette = (ActionPalette)form.Controls.Find("ActionPalette", true)[0];
                 Check(palette.Items[0].ToString() == "Play / pause", "Palette items expose human-readable accessible names");
+                Check(palette.Items.Count == 9 && palette.AccessibilityObject.GetChildCount() == 9,
+                    "Every palette exposes the extra MD301 Plus settings action to accessibility");
+                palette.AccessibilityObject.GetChild(8).DoDefaultAction();
+                Application.DoEvents();
+                Check(form.ReadSettings().Actions[ring.SelectedSlot].Kind == "settings",
+                    "The MD301 Plus settings palette option assigns the built-in action");
                 form.Controls.Find("ButtonBack", true)[0].AccessibilityObject.DoDefaultAction();
                 Application.DoEvents();
                 Check(form.ReadSettings().Trigger == "Mouse4", "Accessible button choices update the actual saved assignment");
@@ -729,6 +808,9 @@ namespace MD301Plus.Tests
                 Check(palette.Width <= palette.Parent.ClientSize.Width, "Palette stays within its column");
                 Label selected = (Label)form.Controls.Find("SelectedAction", true)[0];
                 Check(selected.Height <= selected.Parent.ClientSize.Height, "Selected-action summary stays within its row");
+                CheckStartupFooter(form);
+                FlowLayoutPanel assignment = (FlowLayoutPanel)form.Controls.Find("ButtonAssignment", true)[0];
+                Check(!assignment.VerticalScroll.Visible, "Moving startup out of the button group removes its default-size scrollbar");
                 using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 {
                     form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
@@ -747,6 +829,7 @@ namespace MD301Plus.Tests
                     Check(choice.Parent.ClientRectangle.Contains(choice.Bounds), "The compact layout keeps " + name + " inside its group");
                 }
                 CheckHeaderFits(header);
+                CheckStartupFooter(form);
                 using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 {
                     form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
@@ -793,6 +876,7 @@ namespace MD301Plus.Tests
         private static void TestNativeMediaDelivery()
         {
             using (MediaProbeForm monitor = new MediaProbeForm())
+            using (RingForm ring = new RingForm())
             {
                 monitor.StartMonitoring();
                 foreach (string command in new[]
@@ -806,9 +890,52 @@ namespace MD301Plus.Tests
                     PumpUntil(delegate { return monitor.EventCount == before + 2; }, "Windows receives the native " + command + " down/up pair");
                     Check(monitor.LastEvent.EndsWith(" UP", StringComparison.Ordinal), "Release the native " + command + " key");
                 }
-
+                int selections = 0;
+                bool wasPreview = false;
+                ring.ActionChosen += delegate(RingAction action, IntPtr target, bool preview)
+                {
+                    selections++;
+                    wasPreview = preview;
+                    if (!preview) ShortcutSender.Send(KeyboardShortcut.Parse(action.Command, false));
+                };
+                RingSettings media = RingSettings.CreateDefault();
+                media.Actions = RingSettings.Preset("Media");
+                IntPtr foreground = Native.GetForegroundWindow();
+                foreach (int slot in new[] { 0, 1, 2, 6 })
+                {
+                    int before = monitor.EventCount, chosenBefore = selections;
+                    ring.ShowMenu(media, foreground, true, null, true);
+                    ring.CompleteSelection(slot);
+                    PumpUntil(delegate { return selections == chosenBefore + 1 && monitor.EventCount == before + 2; },
+                        "Settings-focused trigger delivers " + media.Actions[slot].Command);
+                    Check(!wasPreview, "Settings-focused media selection is executable");
+                    before = monitor.EventCount;
+                    chosenBefore = selections;
+                    ring.ShowMenu(media, foreground, true);
+                    ring.CompleteSelection(slot);
+                    PumpUntil(delegate { return selections == chosenBefore + 1; }, "Explicit preview dispatches the selected media action");
+                    Check(wasPreview && monitor.EventCount == before, "Explicit media previews stay inert and reset the previous mode");
+                }
+                int lastSelection = selections, events = monitor.EventCount;
+                ring.ShowMenu(RingSettings.CreateDefault(), foreground, true, null, true);
+                ring.CompleteSelection(0);
+                PumpUntil(delegate { return selections == lastSelection + 1; }, "Settings-focused regular shortcut is selected");
+                Check(wasPreview && monitor.EventCount == events, "Settings-focused non-media shortcuts stay safely preview-only");
             }
-            Console.WriteLine("PASS: real SendInput media delivery captured before changing system volume or playback");
+            Console.WriteLine("PASS: real media delivery, Settings-focused media execution and inert explicit previews");
+        }
+
+        private static void CheckStartupFooter(SettingsForm form)
+        {
+            FlowLayoutPanel preferences = (FlowLayoutPanel)form.Controls.Find("StartupPreferences", true)[0];
+            Check(preferences.Parent.Name == "SettingsFooter", "Startup is outside the scrolling button assignment panel");
+            foreach (Control control in preferences.Controls)
+            {
+                Check(control.Visible && preferences.ClientRectangle.Contains(control.Bounds),
+                    "Startup control stays completely visible: " + control.Name);
+                Check(control.Width >= control.PreferredSize.Width && control.Height >= control.PreferredSize.Height,
+                    "Startup control text is not clipped: " + control.Name);
+            }
         }
 
         private static void TestActionDialogRendering()
@@ -828,6 +955,17 @@ namespace MD301Plus.Tests
                     image.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "action-dialog-preview.png"), ImageFormat.Png);
                 }
                 dialog.Close();
+            }
+            using (BackgroundActionPreview dialog = new BackgroundActionPreview(RingAction.OpenSettings()))
+            {
+                dialog.Show();
+                Application.DoEvents();
+                Check(((ComboBox)dialog.Controls.Find("ActionKind", true)[0]).SelectedIndex == 2 &&
+                    !dialog.Controls.Find("ActionCommand", true)[0].Enabled,
+                    "Editing a Settings action preserves its kind and needs no command");
+                ((Button)dialog.AcceptButton).PerformClick();
+                Check(dialog.ResultAction != null && dialog.ResultAction.Kind == "settings" && dialog.ResultAction.Command == "",
+                    "The custom action editor saves the Settings action without converting it to a keyboard shortcut");
             }
             Console.WriteLine("PASS: refined action dialog layout and native editable fields");
         }
@@ -914,10 +1052,15 @@ namespace MD301Plus.Tests
                         Check(guide.ButtonAt(new Point(target.Left + target.Width / 2, target.Top + target.Height / 2)) == button,
                             "The illustrated " + button + " button matches its hit target at " + size);
                     }
-                    Check(guide.ButtonBounds(EditorButton.Dpi).Top > guide.ButtonBounds(EditorButton.Middle).Bottom,
-                        "The DPI switch remains below, and separate from, the main wheel");
-                    Check(guide.ButtonBounds(EditorButton.Back).Top > guide.ButtonBounds(EditorButton.Forward).Bottom,
-                        "The two side buttons retain their physical order");
+                    Check(guide.ButtonBounds(EditorButton.Dpi).Left > guide.ButtonBounds(EditorButton.Middle).Left &&
+                        guide.ButtonBounds(EditorButton.Dpi).Bottom < guide.ButtonBounds(EditorButton.Middle).Bottom,
+                        "The angled guide places the DPI switch behind the main wheel toward the palm");
+                    Check(guide.ButtonBounds(EditorButton.Back).Left > guide.ButtonBounds(EditorButton.Forward).Left &&
+                        guide.ButtonBounds(EditorButton.Back).Top < guide.ButtonBounds(EditorButton.Forward).Top,
+                        "The angled side buttons retain their physical front-to-back order");
+                    Rectangle dpi = guide.ButtonBounds(EditorButton.Dpi);
+                    Check(guide.ButtonAt(new Point(dpi.Left, dpi.Top)) == EditorButton.Unassigned,
+                        "The DPI bounding-box corner outside its angled shape is not clickable");
                 }
             }
             Console.WriteLine("PASS: ring-first drag/drop, position swaps, isolated drafts and physical button guide");
@@ -1171,8 +1314,21 @@ namespace MD301Plus.Tests
             }
             using (HotkeyWindow afterDispose = new HotkeyWindow())
                 afterDispose.Register(nextTrigger);
+            RingSettings withSettingsShortcut = store.Load();
+            withSettingsShortcut.Actions[0] = RingAction.OpenSettings();
+            store.Save(withSettingsShortcut);
             using (RingApplication unassigned = new RingApplication(false, false, store, requestName))
+            {
                 Check(!unassigned.ActiveBinding.IsAssigned, "Starting without an assignment claims no button or hotkey");
+                Check(!unassigned.IsSettingsOpen, "Settings stays closed until its ring shortcut is chosen");
+                unassigned.ToggleRing();
+                RingForm openRing = null;
+                foreach (Form form in Application.OpenForms)
+                    if (form is RingForm && form.Visible) openRing = (RingForm)form;
+                Check(openRing != null, "The live ring contains the saved Settings shortcut");
+                openRing.CompleteSelection(0);
+                PumpUntil(delegate { return unassigned.IsSettingsOpen; }, "Choosing the MD301 Plus settings shortcut opens the existing app's editor");
+            }
             Console.WriteLine("PASS: tray lifecycle, second-launch Settings handoff, keyboard/mouse/disabled transitions, binding rollback and idempotent shutdown");
         }
 

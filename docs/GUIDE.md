@@ -10,12 +10,17 @@ Assign Back, Forward, or middle-click directly, or use Gear Link for another
 button. The editor is centered on the ring: drag actions onto its eight circles,
 swap positions by dragging, and choose the triggering button on a mouse guide.
 Native Windows shortcuts and media keys are supported.
+Every shortcut palette also includes **MD301 Plus settings**. Drag it onto a
+ring position and save to open this app's Settings window from the ring.
+The custom action editor offers **Open MD301 Plus settings** too; it needs
+no executable path or command.
 
 The native editor uses larger 11-point body text, higher-contrast secondary
 labels, rounded buttons/fields/action cards, and visible keyboard-focus rings.
-The mouse guide is an original top-view illustration based on the MD301's
-ergonomic thumb rest, split front buttons and ribbed center controls; its
-highlighted DPI switch remains directly selectable. Longer ring labels wrap
+The mouse guide uses an original, softly realistic three-quarter illustration
+based on the MD301's shape, including both scroll wheels, its thumb rest and the
+slim side buttons. The DPI switch, wheel click and side buttons remain directly
+selectable, with a highlight and caption for the chosen control. Longer ring labels wrap
 instead of shrinking or hiding common action names.
 
 ## Install
@@ -36,7 +41,12 @@ Windows 10 version 1903 and later. It does not need administrator rights.
 - MD301 Plus installs for the current user in `%LOCALAPPDATA%\Programs\MD301 Plus`
   and adds **MD301 Plus** to the Start menu. The Start menu shortcut opens Settings.
 - **Start MD301 Plus when I sign in to Windows** is selected by default. Run
-  Setup again to change it.
+  Settings and change **Start when I sign in to Windows** in the bottom bar to turn it on or off.
+  This applies immediately, independently of **Save changes**. The checkbox
+  reflects the existing startup entry; it does not reset your preference.
+  If Windows has disabled startup, use **Windows Startup settings** to enable
+  MD301 Plus there. Store copies use that button instead of a checkbox, because
+  Windows manages their startup task.
 - To update, run the newer Setup. If MD301 Plus is running, Setup asks you to
   exit it from its tray menu first. Updating keeps your settings.
 - The installer is not code-signed yet, so Windows SmartScreen may warn about it.
@@ -181,7 +191,9 @@ The build generates and embeds a multi-resolution mouse icon (16-256 pixels):
 a minimal graphite MD301-inspired silhouette with its asymmetric thumb rest,
 light outline, and brass scroll wheel. The executable, Settings window,
 and notification-area icon share this artwork; no external icon file is needed
-at runtime. Its source artwork is in `tools\New-AppIcon.ps1`.
+at runtime. The graphite-and-brass three-quarter mouse artwork is in
+`src\Assets\MD301Icon.png`; `tools\New-AppIcon.ps1` generates the ICO frames and
+Store logos from the same transparent source.
 First launch opens Settings; afterward the app lives in the notification area.
 Double-click its mouse icon, right-click it and choose **Settings...**, or open
 **MD301 Plus** from the Start menu. The notification icon may be in Windows's
@@ -233,8 +245,10 @@ mouse-button event until remapped.
    button, choose the keyboard assignment, and assign **F8 alone** (or your
    chosen key). Apply/save the mapping using Gear Link's controls.
 5. Return to MD301 Plus and click **Save changes** to apply and resume the ring.
-   Press the DPI switch. While the editor has focus, this displays a safe
-   preview and reports that the saved trigger was received.
+   Press the DPI switch. While the editor has focus, media and volume controls
+   still run, and the ring says **MEDIA ACTIVE**. Other actions remain
+   preview-only so shortcuts are not sent to the editor. **Preview ring**
+   is always inert, including media controls.
 
 This is an explicit DPI setup option, **not an automatic firmware remapper**.
 The Gear Link step is required. If pressing F8 on the keyboard opens the ring

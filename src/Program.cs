@@ -179,7 +179,7 @@ namespace MD301Plus
             ShowBattery();
             try
             {
-                ring.ShowMenu(settings, target, editorFocused);
+                ring.ShowMenu(settings, target, editorFocused, null, editorFocused);
                 sinceOpened.Restart();
             }
             catch (ExternalException ex) { ReportActionError("Cannot open the action ring", ex); }
@@ -279,7 +279,8 @@ namespace MD301Plus
         {
             if (preview)
             {
-                Notify("Preview: " + action.Label, action.Command + "\r\nNo action was executed.", ToolTipIcon.Info);
+                Notify("Preview: " + action.Label, (action.Kind == "settings" ? "Open MD301 Plus settings" : action.Command) +
+                    "\r\nNo action was executed.", ToolTipIcon.Info);
                 return;
             }
             pendingAction = action;
@@ -320,6 +321,10 @@ namespace MD301Plus
                 if (action.Kind == "shortcut")
                 {
                     ShortcutSender.Send(KeyboardShortcut.Parse(action.Command, false));
+                }
+                else if (action.Kind == "settings")
+                {
+                    ShowSettings();
                 }
                 else
                 {

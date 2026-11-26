@@ -40,6 +40,7 @@ $references = @('System.dll', 'System.Core.dll', 'System.Drawing.dll',
 $common = @('/nologo', '/warn:4', '/warnaserror+', '/optimize+', '/checked+', '/platform:anycpu')
 $common += '/win32icon:' + $appIcon
 $common += '/resource:' + $appIcon + ',MD301Plus.AppIcon'
+$common += '/resource:' + (Join-Path $PSScriptRoot 'src\Assets\MD301Mouse.png') + ',MD301Plus.MouseIllustration'
 foreach ($reference in $references) {
     $common += '/reference:' + (Join-Path $runtime $reference)
 }

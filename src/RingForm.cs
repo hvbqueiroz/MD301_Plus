@@ -14,7 +14,8 @@ namespace MD301Plus
         internal static readonly Color BatteryTrack = Color.FromArgb(49, 53, 61);
 
         internal static void Draw(Graphics graphics, RingGeometry geometry, IList<RingAction> actions, int hovered, bool preview,
-            bool editing = false, int battery = MouseBattery.Unknown, BatteryReading reading = null)
+            bool editing = false, int battery = MouseBattery.Unknown, BatteryReading reading = null,
+            bool mediaActive = false)
         {
             if (reading != null) battery = reading.Percent;
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -68,7 +69,7 @@ namespace MD301Plus
                 graphics.DrawEllipse(border, core);
                 Text(graphics, "MD301 +", title, Theme.Text, new RectangleF(
                     core.X, center.Y - 29 * scale, core.Width, 28 * scale));
-                Text(graphics, editing ? "YOUR RING" : preview ? "PREVIEW" : "ACTION RING", small, Theme.Accent, new RectangleF(
+                Text(graphics, editing ? "YOUR RING" : preview ? mediaActive ? "MEDIA ACTIVE" : "PREVIEW" : "ACTION RING", small, Theme.Accent, new RectangleF(
                     core.X, center.Y + 1 * scale, core.Width, 15 * scale));
                 Text(graphics, hovered >= 0 ? actions[hovered].Label : editing ? "Drag actions here" : "Click / 1-8", small, Theme.Muted, new RectangleF(
                     core.X + 5 * scale, center.Y + 21 * scale, core.Width - 10 * scale, 16 * scale));
@@ -163,6 +164,7 @@ namespace MD301Plus
         private BatteryReading batteryStatus;
         private bool batteryCurrent = true;
         private bool preview;
+        private bool mediaActive;
         private int generation;
         internal event Action<RingAction, IntPtr, bool> ActionChosen;
 
@@ -210,6 +212,8 @@ namespace MD301Plus
             get
             {
                 return "Eight actions, clockwise from the top. Press 1 through 8 to choose, or Escape to cancel. " +
+                    (preview ? mediaActive ? "Media controls are active; other actions are preview-only. " :
+                        "Preview only; no actions will run. " : "") +
                     (batteryStatus == null ? RingPainter.BatteryDescription(battery) : batteryStatus.Description);
             }
         }
@@ -284,7 +288,8 @@ namespace MD301Plus
             base.WndProc(ref message);
         }
 
-        internal void ShowMenu(RingSettings next, IntPtr target, bool isPreview, TriggerBinding activeTrigger = null)
+        internal void ShowMenu(RingSettings next, IntPtr target, bool isPreview, TriggerBinding activeTrigger = null,
+            bool allowMediaActions = false)
         {
             next.Validate();
             CloseMenu();
@@ -293,6 +298,8 @@ namespace MD301Plus
             settings = next.Copy();
             source = target;
             preview = isPreview;
+            mediaActive = allowMediaActions;
+            AccessibleDescription = Description;
             hovered = -1;
             Bounds = geometry.Bounds;
             using (GraphicsPath path = new GraphicsPath())
@@ -372,6 +379,9 @@ namespace MD301Plus
                 RingAction action = index >= 0 ? settings.Actions[index] : null;
                 IntPtr target = source;
                 bool wasPreview = preview;
+                if (wasPreview && mediaActive && action != null && action.Kind == "shortcut" &&
+                    KeyboardShortcut.Parse(action.Command, false).IsMediaKey)
+                    wasPreview = false;
                 CloseMenu();
                 Action<RingAction, IntPtr, bool> handler = ActionChosen;
                 if (action != null && handler != null) handler(action, target, wasPreview);
@@ -393,7 +403,7 @@ namespace MD301Plus
         {
             base.OnPaint(e);
             if (geometry != null)
-                RingPainter.Draw(e.Graphics, geometry, settings.Actions, hovered, preview, false, battery, batteryStatus);
+                RingPainter.Draw(e.Graphics, geometry, settings.Actions, hovered, preview, false, battery, batteryStatus, mediaActive);
         }
 
         protected override void Dispose(bool disposing)
