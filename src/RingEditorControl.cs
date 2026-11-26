@@ -387,12 +387,13 @@ namespace MD301Plus
         {
             Items.Clear();
             foreach (RingAction action in RingSettings.Preset(name)) Items.Add(action);
+            Items.Add(RingAction.OpenSettings());
             if (Items.Count > 0) SelectedIndex = 0;
         }
 
         protected override AccessibleObject CreateAccessibilityInstance()
         {
-            return new ActionAccessibility(this, 8,
+            return new ActionAccessibility(this, RingGeometry.ActionCount + 1,
                 delegate(int index) { return index < Items.Count ? "Assign " + ((RingAction)Items[index]).Label : "Action"; },
                 delegate(int index) { return index < Items.Count ? GetItemRectangle(index) : Rectangle.Empty; },
                 delegate(int index)
@@ -442,7 +443,7 @@ namespace MD301Plus
                 TextRenderer.DrawText(e.Graphics, action.Label, labelFont, label, Theme.Text,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 Rectangle command = new Rectangle(left, label.Bottom, label.Width, e.Bounds.Height / 2 - inset / 2);
-                TextRenderer.DrawText(e.Graphics, action.Command, detail, command, Theme.Muted,
+                TextRenderer.DrawText(e.Graphics, action.Kind == "settings" ? "Open this app's settings" : action.Command, detail, command, Theme.Muted,
                     TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }

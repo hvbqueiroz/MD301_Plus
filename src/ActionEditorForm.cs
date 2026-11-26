@@ -42,9 +42,13 @@ namespace MD301Plus
             label = Field(action.Label);
             label.MaxLength = 24;
             kind = Choice(false);
-            kind.Items.AddRange(new[] { "Keyboard shortcut", "Open app, file or website" });
-            kind.SelectedIndex = action.Kind == "launch" ? 1 : 0;
+            kind.Name = "ActionKind";
+            kind.Items.AddRange(new[] { "Keyboard shortcut", "Open app, file or website", "Open MD301 Plus settings" });
+            kind.SelectedIndex = action.Kind == "settings" ? 2 : action.Kind == "launch" ? 1 : 0;
             command = Field(action.Command);
+            command.Name = "ActionCommand";
+            command.Enabled = kind.SelectedIndex != 2;
+            kind.SelectedIndexChanged += delegate { command.Enabled = kind.SelectedIndex != 2; };
             icon = Choice(true);
             icon.Items.AddRange(ActionIcons.Names);
             icon.SelectedItem = action.Icon;
@@ -59,7 +63,7 @@ namespace MD301Plus
             Label help = new Label
             {
                 Dock = DockStyle.Fill, ForeColor = Theme.Muted,
-                Text = "Examples: Ctrl+Shift+S, Win+E, MediaPlayPause, VolumeUp.\r\nFor a launcher, enter an absolute path or an HTTP(S) URL."
+                Text = "Examples: Ctrl+Shift+S, Win+E, MediaPlayPause, VolumeUp.\r\nFor a launcher, enter an absolute path or an HTTP(S) URL.\r\nOpening MD301 Plus settings needs no command."
             };
             layout.Controls.Add(help, 0, 4);
             layout.SetColumnSpan(help, 2);
@@ -141,8 +145,8 @@ namespace MD301Plus
         {
             RingAction result = new RingAction
             {
-                Label = label.Text.Trim(), Kind = kind.SelectedIndex == 1 ? "launch" : "shortcut",
-                Command = command.Text.Trim(), Icon = Convert.ToString(icon.SelectedItem)
+                Label = label.Text.Trim(), Kind = kind.SelectedIndex == 2 ? "settings" : kind.SelectedIndex == 1 ? "launch" : "shortcut",
+                Command = kind.SelectedIndex == 2 ? "" : command.Text.Trim(), Icon = Convert.ToString(icon.SelectedItem)
             };
             try
             {

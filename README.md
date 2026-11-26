@@ -56,6 +56,16 @@ trigger unassigned until you choose and save one.
 MD301 Plus keeps running in the notification area of the taskbar. To change your
 ring, open **MD301 Plus** from the Start menu.
 
+At the bottom of Settings, use **Start when I sign in to Windows** to turn automatic startup
+on or off. This checkbox applies immediately, without **Save changes**.
+Store copies use **Windows Startup settings** instead.
+
+Media controls work when you open the ring with your assigned button, even
+while Settings has focus. **Preview ring** is only a preview and runs no actions.
+
+Drag **MD301 Plus settings** from the shortcut palette onto the ring to add
+a shortcut back to the app's Settings window.
+
 To check which version you have, look at the top-right corner of Settings, or
 point to the MD301 Plus icon in the notification area. Copies from the Store also
 say **(Microsoft Store)**.

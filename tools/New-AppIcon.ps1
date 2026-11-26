@@ -9,50 +9,24 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 function New-IconBitmap([int]$size) {
-    $canvas = New-Object System.Drawing.Bitmap ($size * 4), ($size * 4)
-    $graphics = [System.Drawing.Graphics]::FromImage($canvas)
-    $body = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $shell = New-Object System.Drawing.Drawing2D.LinearGradientBrush `
-        ([System.Drawing.Rectangle]::new(0, 0, 256, 256)), `
-        ([System.Drawing.Color]::FromArgb(48, 54, 64)), `
-        ([System.Drawing.Color]::FromArgb(28, 32, 40)), 45
-    $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(219, 225, 233)), 5
-    $seam = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(112, 121, 135)), 3
-    $brass = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(231, 190, 113))
+    $source = [System.Drawing.Image]::FromFile((Join-Path $PSScriptRoot '..\src\Assets\MD301Icon.png'))
     $bitmap = New-Object System.Drawing.Bitmap $size, $size
-    $scaled = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
-        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $graphics.ScaleTransform(($size * 4 / 256.0), ($size * 4 / 256.0))
-        # An asymmetric thumb rest distinguishes the MD301 from a generic mouse.
-        $body.AddBezier(130, 15, 91, 10, 68, 20, 67, 55)
-        $body.AddBezier(67, 55, 66, 78, 70, 91, 57, 103)
-        $body.AddBezier(57, 103, 30, 111, 24, 132, 25, 167)
-        $body.AddBezier(25, 167, 24, 204, 43, 230, 82, 239)
-        $body.AddBezier(82, 239, 127, 254, 173, 241, 194, 213)
-        $body.AddBezier(194, 213, 216, 184, 209, 146, 209, 113)
-        $body.AddBezier(209, 113, 207, 87, 214, 52, 200, 30)
-        $body.AddBezier(200, 30, 187, 14, 162, 14, 130, 15)
-        $body.CloseFigure()
-        $graphics.FillPath($shell, $body)
-        $graphics.DrawPath($edge, $body)
-        $graphics.DrawLine($seam, 139, 18, 139, 103)
-        $graphics.DrawBezier($seam, 67, 106, 111, 114, 167, 114, 208, 106)
-        $graphics.FillEllipse($brass, 131, 40, 16, 36)
-        $scaled.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $scaled.DrawImage($canvas, 0, 0, $size, $size)
+        $scale = ($size * 0.94) / [Math]::Max($source.Width, $source.Height)
+        $width = $source.Width * $scale
+        $height = $source.Height * $scale
+        $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $graphics.DrawImage($source, ([System.Drawing.RectangleF]::new(
+            (($size - $width) / 2), (($size - $height) / 2), $width, $height)))
     } catch {
         $bitmap.Dispose()
         throw
     } finally {
-        $scaled.Dispose()
-        $brass.Dispose()
-        $seam.Dispose()
-        $edge.Dispose()
-        $shell.Dispose()
-        $body.Dispose()
         $graphics.Dispose()
-        $canvas.Dispose()
+        $source.Dispose()
     }
     return $bitmap
 }

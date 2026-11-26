@@ -33,6 +33,11 @@ namespace MD301Plus
             return new RingAction { Label = Label, Kind = Kind, Command = Command, Icon = Icon };
         }
 
+        public static RingAction OpenSettings()
+        {
+            return new RingAction { Label = "MD301 Plus settings", Kind = "settings", Command = "", Icon = "settings" };
+        }
+
         public override string ToString()
         {
             return Label;
@@ -53,9 +58,13 @@ namespace MD301Plus
             {
                 ValidateLaunchTarget(Command);
             }
+            else if (Kind == "settings")
+            {
+                if (Command != "") throw new SettingsException(prefix + "the MD301 Plus settings action takes no command.");
+            }
             else
             {
-                throw new SettingsException(prefix + "kind must be shortcut or launch.");
+                throw new SettingsException(prefix + "kind must be shortcut, launch or settings.");
             }
         }
 
@@ -209,7 +218,7 @@ namespace MD301Plus
         {
             "copy", "paste", "cut", "undo", "redo", "save", "task-view",
             "screenshot", "search", "folder", "launch", "shortcut",
-            "play-pause", "next-track", "previous-track", "volume-up", "volume-down", "mute", "stop", "windows"
+            "play-pause", "next-track", "previous-track", "volume-up", "volume-down", "mute", "stop", "windows", "settings"
         };
 
         public static string Glyph(string name)
@@ -236,6 +245,7 @@ namespace MD301Plus
                 case "mute": return "\uE74F";
                 case "stop": return "\uE71A";
                 case "windows": return "\uE782";
+                case "settings": return "\uE713";
                 default: throw new SettingsException("Unsupported action icon: " + name);
             }
         }

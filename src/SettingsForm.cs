@@ -32,6 +32,9 @@ namespace MD301Plus
         private readonly RingEditorControl ring;
         private readonly ActionPalette palette;
         private readonly RadioButton[] categories;
+        private readonly StartupRegistration startupRegistration;
+        private readonly CheckBox startup;
+        private bool updatingStartup;
         private EditorButton selectedButton;
         private string currentCategory = "Productivity";
         private bool dirty;
@@ -52,13 +55,15 @@ namespace MD301Plus
         internal RingEditorControl RingEditor { get { return ring; } }
 
         internal SettingsForm(RingSettings settings, Action<RingSettings> save, Action<RingSettings> preview,
-            Action pauseForSetup = null, Action resumeAfterSetup = null, bool setupPaused = false, Action<string> openLink = null)
+            Action pauseForSetup = null, Action resumeAfterSetup = null, bool setupPaused = false, Action<string> openLink = null,
+            StartupRegistration startupRegistration = null)
         {
             settings.Validate();
             this.save = save;
             this.preview = preview;
             this.pauseForSetup = pauseForSetup;
             this.resumeAfterSetup = resumeAfterSetup;
+            this.startupRegistration = startupRegistration ?? new StartupRegistration();
             launcher = openLink == null ? new ActionLauncher(GearLinkOpened) : new ActionLauncher(openLink, GearLinkOpened);
             savedTrigger = settings.Trigger;
             SuspendLayout();
@@ -265,9 +270,22 @@ namespace MD301Plus
 
             status = new Label { Name = "EditorStatus", Dock = DockStyle.Fill, ForeColor = Theme.Accent, AutoEllipsis = true };
             root.Controls.Add(status, 0, 2);
+            TableLayoutPanel footerLayout = new TableLayoutPanel
+            {
+                Name = "SettingsFooter", Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty
+            };
+            footerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            FlowLayoutPanel startupPreferences = new FlowLayoutPanel
+            {
+                Name = "StartupPreferences", Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty
+            };
+            footerLayout.Controls.Add(startupPreferences, 0, 0);
             FlowLayoutPanel footer = new FlowLayoutPanel
             {
-                Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false
+                AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false, Margin = Padding.Empty
             };
             Button apply = Button("Save changes", true);
             apply.Click += delegate { Save(); };
@@ -278,7 +296,8 @@ namespace MD301Plus
             footer.Controls.Add(apply);
             footer.Controls.Add(close);
             footer.Controls.Add(test);
-            root.Controls.Add(footer, 0, 3);
+            footerLayout.Controls.Add(footer, 1, 0);
+            root.Controls.Add(footerLayout, 0, 3);
             AcceptButton = apply;
 
             TriggerBinding binding = TriggerBinding.Parse(settings.Trigger);
@@ -303,9 +322,80 @@ namespace MD301Plus
             UpdateAssignment();
             UpdateSelection();
             status.Text = "Drag an action onto a ring position to get started.";
+            startup = new CheckBox
+            {
+                Name = "StartWithWindows", Text = "Start when I sign in to Windows",
+                AutoSize = true, Margin = new Padding(3, 12, 12, 3),
+                AccessibleName = "Start MD301 Plus when I sign in to Windows"
+            };
+            if (!ShellLauncher.IsPackaged)
+            {
+                startupPreferences.Controls.Add(startup);
+                RefreshStartup();
+                startup.CheckedChanged += delegate { ChangeStartup(); };
+            }
+            else
+            {
+                startup.Dispose();
+            }
+            LinkLabel startupSettings = new LinkLabel
+            {
+                Name = "WindowsStartupSettings", Text = "Windows Startup settings", AutoSize = true,
+                LinkColor = Theme.Accent, ActiveLinkColor = Theme.Text, VisitedLinkColor = Theme.Accent,
+                Margin = new Padding(3, 14, 3, 3)
+            };
+            startupSettings.LinkClicked += delegate
+            {
+                try { ShellLauncher.Open("ms-settings:startupapps"); }
+                catch (Win32Exception ex) { AppLog.ShowError(this, "Cannot open Startup settings", ex); }
+                catch (InvalidOperationException ex) { AppLog.ShowError(this, "Cannot open Startup settings", ex); }
+            };
+            startupPreferences.Controls.Add(startupSettings);
+            Activated += delegate { if (!ShellLauncher.IsPackaged) RefreshStartup(); };
             SetSetupPaused(setupPaused);
             ResumeLayout(false);
             PerformLayout();
+        }
+
+        private void RefreshStartup()
+        {
+            updatingStartup = true;
+            try
+            {
+                startup.Checked = startupRegistration.IsEnabled();
+                startup.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                if (!IsStartupError(ex)) throw;
+                startup.Enabled = false;
+                status.Text = "Cannot read startup setting. " + AppLog.Error("Cannot read startup setting", ex);
+            }
+            finally { updatingStartup = false; }
+        }
+
+        private void ChangeStartup()
+        {
+            if (updatingStartup) return;
+            try
+            {
+                startupRegistration.SetEnabled(startup.Checked);
+                status.Text = startup.Checked ? "MD301 Plus will start when you sign in. Applied immediately." :
+                    "MD301 Plus will not start when you sign in. Applied immediately.";
+            }
+            catch (Exception ex)
+            {
+                if (!IsStartupError(ex)) throw;
+                RefreshStartup();
+                status.Text = ex.Message;
+                AppLog.ShowError(this, "Cannot change startup setting", ex);
+            }
+        }
+
+        private static bool IsStartupError(Exception error)
+        {
+            return error is IOException || error is UnauthorizedAccessException ||
+                error is System.Security.SecurityException || error is InvalidOperationException;
         }
 
         private static Label Heading(string text, int width)
@@ -506,7 +596,7 @@ namespace MD301Plus
 
         internal void NotifyTriggerReceived()
         {
-            status.Text = "Saved trigger received (" + savedTrigger + "). Showing a safe preview of your ring.";
+            status.Text = "Saved trigger received (" + savedTrigger + "). Media controls are active; other actions are preview-only.";
         }
 
         internal void ShowRecoveryNotice(string preservedFile)
