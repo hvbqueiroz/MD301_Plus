@@ -810,13 +810,20 @@ namespace MD301Plus.Tests
                 Check(selected.Height <= selected.Parent.ClientSize.Height, "Selected-action summary stays within its row");
                 CheckStartupFooter(form);
                 FlowLayoutPanel assignment = (FlowLayoutPanel)form.Controls.Find("ButtonAssignment", true)[0];
+                float displayScale = form.DeviceDpi / 96f;
+                // OnShown fits the window to the screen; CI may not have room for its full default height.
+                form.ClientSize = new Size((int)(1240 * displayScale), (int)(880 * displayScale));
+                Application.DoEvents();
+                Console.WriteLine("LAYOUT: client " + form.ClientSize + ", DPI " + form.DeviceDpi +
+                    ", autoscale " + form.CurrentAutoScaleDimensions + ", assignment " + assignment.ClientSize);
+                foreach (Control child in assignment.Controls)
+                    if (child.Visible) Console.WriteLine("LAYOUT CHILD: " + child.Text + " " + child.Bounds);
                 Check(!assignment.VerticalScroll.Visible, "Moving startup out of the button group removes its default-size scrollbar");
                 using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 {
                     form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
                     image.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-preview.png"), ImageFormat.Png);
                 }
-                float displayScale = form.DeviceDpi / 96f;
                 form.Size = new Size((int)(1040 * displayScale), (int)(720 * displayScale));
                 Application.DoEvents();
                 Rectangle editorBounds = ring.RectangleToScreen(ring.ClientRectangle);
@@ -830,6 +837,13 @@ namespace MD301Plus.Tests
                 }
                 CheckHeaderFits(header);
                 CheckStartupFooter(form);
+                Control gearLink = form.Controls.Find("OpenGearLink", true)[0];
+                assignment.ScrollControlIntoView(gearLink);
+                Application.DoEvents();
+                Check(assignment.ClientRectangle.Contains(gearLink.Bounds),
+                    "The compact layout can scroll to the DPI setup button");
+                Check(!assignment.HorizontalScroll.Visible,
+                    "The compact button assignment panel does not need horizontal scrolling");
                 using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 {
                     form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
