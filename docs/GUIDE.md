@@ -426,7 +426,10 @@ requirements still apply, such as enabling clipboard history.
   Number keys and Escape already held when the ring opens stay with the original
   app until released; only a fresh captured press/release selects an action.
   Application launches and Gear Link browser requests use an isolated STA helper
-  process. A launch taking more than ten seconds stops that helper and reports
+  process. Windows binds the helper to the tray process's lifetime before it can
+  check the target or issue a shell request, so exiting or crashing MD301 Plus
+  cannot leave a helper to launch an app later. Apps already launched are not
+  terminated with the helper. A launch taking more than ten seconds stops that helper and reports
   an error, without queuing delayed launches. Windows may already have accepted
   the request, so check whether the target opened before trying again.
   There is no key history, telemetry, network service, or firmware modification.
@@ -463,7 +466,9 @@ requirements still apply, such as enabling clipboard history.
   identity differs, a notice explains which copy is running and how to switch.
   Older copies without build identification are explicitly marked unidentified.
   Battery access and driver errors are reported as failed reads, not as a sleeping
-  mouse; repeated failures are logged once until the connection recovers.
+  mouse; an inaccessible collection is discarded and other compatible collections
+  are tried before reporting failure. Repeated failures are logged once until the
+  connection recovers.
 - Elevated applications, UAC/secure desktops, games, and apps that reject
   simulated input can block shortcuts. The app does not bypass these boundaries.
   Windows accepting injected keys does not guarantee that a particular app

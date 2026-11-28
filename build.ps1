@@ -1,8 +1,6 @@
 [CmdletBinding()]
 param(
     [switch]$Test,
-    [ValidateSet('All', 'Reliability')]
-    [string]$TestScope = 'All',
     [switch]$Installer,
     [switch]$Package,
     [string]$OutputDirectory = 'bin',
@@ -10,7 +8,9 @@ param(
     [string]$MakeAppx,
     [string]$PackageIdentityName,
     [string]$PackagePublisher,
-    [string]$PackagePublisherDisplayName
+    [string]$PackagePublisherDisplayName,
+    [ValidateSet('All', 'Reliability')]
+    [string]$TestScope = 'All'
 )
 
 $ErrorActionPreference = 'Stop'

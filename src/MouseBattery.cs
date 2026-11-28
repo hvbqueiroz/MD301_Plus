@@ -13,6 +13,7 @@ namespace MD301Plus
     internal enum BatteryRead { Ok, Asleep, Missing, Failed, Pending }
 
     internal delegate BatteryRead BatterySource(out int percent);
+    internal delegate BatteryRead BatteryQuery(string path, out int percent);
 
     internal sealed class BatteryReading
     {
@@ -102,24 +103,45 @@ namespace MD301Plus
 
         internal static BatteryRead Read(out int percent)
         {
+            return ReadCollections(out percent, ref cachedPath, FindCollections, Query);
+        }
+
+        internal static BatteryRead ReadCollections(out int percent, ref string cached,
+            Func<List<string>> collections, BatteryQuery query)
+        {
             percent = MouseBattery.Unknown;
-            string path = cachedPath;
+            string path = cached;
+            Exception failure = null;
             if (path != null)
             {
-                BatteryRead cached = Query(path, out percent);
-                if (cached != BatteryRead.Missing) return cached;
-                cachedPath = null;
+                try
+                {
+                    BatteryRead cachedResult = query(path, out percent);
+                    if (cachedResult != BatteryRead.Missing) return cachedResult;
+                }
+                catch (Win32Exception error) { failure = error; }
+                catch (IOException error) { failure = error; }
+                cached = null;
             }
             BatteryRead result = BatteryRead.Missing;
-            foreach (string candidate in FindCollections())
+            foreach (string candidate in collections())
             {
+                if (candidate == path) continue;
                 int value;
-                BatteryRead read = Query(candidate, out value);
+                BatteryRead read;
+                try { read = query(candidate, out value); }
+                catch (Win32Exception error) { if (failure == null) failure = error; continue; }
+                catch (IOException error) { if (failure == null) failure = error; continue; }
                 if (read == BatteryRead.Missing) continue;
-                cachedPath = candidate;
+                cached = candidate;
                 result = read;
                 percent = value;
-                if (read == BatteryRead.Ok) break;
+                if (read == BatteryRead.Ok) return read;
+            }
+            if (failure != null)
+            {
+                cached = null;
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
             }
             return result;
         }

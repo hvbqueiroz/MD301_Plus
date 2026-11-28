@@ -74,8 +74,18 @@ namespace MD301Plus.Tests
             }
             if (args.Length == 2 && args[0] == "--launch-process-probe")
             {
+                if (!LaunchProcess.WaitForAuthorization()) return 1;
                 string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
-                if (Path.GetFileName(target) != "launch-success")
+                string kind = Path.GetFileName(target);
+                if (kind == "launch-no-result") return 3;
+                if (kind == "launch-near-deadline") Thread.Sleep(900);
+                if (kind == "launch-child")
+                {
+                    using (Process child = Process.Start(new ProcessStartInfo(typeof(TestRunner).Assembly.Location,
+                        "--launch-descendant-probe " + args[1]) { UseShellExecute = false, CreateNoWindow = true }))
+                        File.WriteAllText(target + ".child", child.Id.ToString());
+                }
+                else if (kind != "launch-success" && kind != "launch-near-deadline")
                 {
                     File.WriteAllText(target + ".started", Process.GetCurrentProcess().Id.ToString());
                     while (!File.Exists(target + ".release")) Thread.Sleep(10);
@@ -83,6 +93,26 @@ namespace MD301Plus.Tests
                 }
                 Console.WriteLine("OK");
                 return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-descendant-probe")
+            {
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                File.WriteAllText(target + ".alive", "alive");
+                while (!File.Exists(target + ".release")) Thread.Sleep(10);
+                File.WriteAllText(target + ".finished", "finished");
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-parent-probe")
+            {
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                ActionLauncher launcher = new ActionLauncher(new LaunchProcess(30000, "--launch-process-probe"), delegate { });
+                launcher.Open(target);
+                Stopwatch wait = Stopwatch.StartNew();
+                while (!File.Exists(target + ".started") && wait.ElapsedMilliseconds < 10000) Thread.Sleep(10);
+                if (!File.Exists(target + ".started")) { launcher.Dispose(); return 2; }
+                if (Path.GetFileName(target) == "launch-parent-crash") Environment.Exit(0);
+                launcher.Dispose();
+                return 0; // Actually end the parent process, without pumping or joining the launch worker.
             }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);

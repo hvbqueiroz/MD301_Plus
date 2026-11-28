@@ -57,9 +57,12 @@ namespace MD301Plus
             {
                 try
                 {
-                    RingAction.ValidateLaunchTarget(target);
-                    if (!RingAction.IsUriLaunchTarget(target) && !exists(target))
-                        throw new FileNotFoundException("The launch target does not exist: " + target);
+                    if (isolated == null)
+                    {
+                        RingAction.ValidateLaunchTarget(target);
+                        if (!RingAction.IsUriLaunchTarget(target) && !exists(target))
+                            throw new FileNotFoundException("The launch target does not exist: " + target);
+                    }
                     if (!disposed) launch(target);
                 }
                 // This boundary must report failures on the UI thread, not terminate the process from a worker.

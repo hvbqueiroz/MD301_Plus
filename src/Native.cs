@@ -579,12 +579,12 @@ namespace MD301Plus
                 mouseHook = Native.SetWindowsHookEx(14, mouseCallback, module, 0);
                 if (mouseHook == IntPtr.Zero)
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot listen for menu clicks.");
-                for (int key = 0x31; key <= 0x38; key++) RememberHeldKey(key);
-                for (int key = 0x61; key <= 0x68; key++) RememberHeldKey(key);
-                RememberHeldKey(0x1B);
                 keyboardHook = Native.SetWindowsHookEx(13, keyboardCallback, module, 0);
                 if (keyboardHook == IntPtr.Zero)
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot listen for Escape and action numbers.");
+                // This thread has not pumped callbacks yet. Snapshot after installation so a release
+                // in the installation gap cannot leave a stale inherited-key entry.
+                SnapshotHeldKeys(delegate(int key) { return (Native.GetAsyncKeyState(key) & 0x8000) != 0; });
             }, ReleaseHooks);
         }
 
@@ -667,9 +667,12 @@ namespace MD301Plus
             return Native.CallNextHookEx(keyboardHook, code, message, data);
         }
 
-        private void RememberHeldKey(int key)
+        internal void SnapshotHeldKeys(Func<int, bool> held)
         {
-            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) inheritedKeys.Add(key);
+            inheritedKeys.Clear();
+            for (int key = 0x31; key <= 0x38; key++) if (held(key)) inheritedKeys.Add(key);
+            for (int key = 0x61; key <= 0x68; key++) if (held(key)) inheritedKeys.Add(key);
+            if (held(0x1B)) inheritedKeys.Add(0x1B);
         }
 
         internal bool Keyboard(int kind, int key, uint modifiers)

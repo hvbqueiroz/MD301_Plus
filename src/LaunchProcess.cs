@@ -14,7 +14,7 @@ namespace MD301Plus
         private readonly object gate = new object();
         private readonly int timeoutMs;
         private readonly string argument;
-        private Process active;
+        private LaunchJob active;
         private bool disposed;
 
         internal LaunchProcess(int timeoutMs = 10000, string argument = HelperArgument)
@@ -27,20 +27,20 @@ namespace MD301Plus
         internal void Open(string target)
         {
             using (ManualResetEvent responseReady = new ManualResetEvent(false))
+            using (LaunchJob lifetime = new LaunchJob())
+            using (Process helper = new Process())
             {
                 string response = null;
                 bool responseClosed = false;
                 object responseGate = new object();
-                Process helper = new Process();
                 helper.StartInfo = new ProcessStartInfo(typeof(Program).Assembly.Location,
                     argument + " " + Convert.ToBase64String(Encoding.UTF8.GetBytes(target)))
                 {
                     UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardOutput = true
+                    RedirectStandardInput = true, RedirectStandardOutput = true
                 };
                 DataReceivedEventHandler receive = delegate(object sender, DataReceivedEventArgs data)
                 {
-                    if (data.Data == null) return;
                     lock (responseGate)
                     {
                         if (!responseClosed && response == null)
@@ -58,22 +58,27 @@ namespace MD301Plus
                     {
                         if (disposed) throw new ObjectDisposedException("LaunchProcess");
                         if (active != null)
-                        {
-                            if (!active.HasExited)
-                                throw new InvalidOperationException("The previous launch helper could not be stopped. Restart MD301 Plus before launching another app.");
-                            active.Dispose();
-                            active = null;
-                        }
-                        helper.Start();
-                        started = true;
-                        active = helper;
-                        Native.AllowSetForegroundWindow((uint)helper.Id);
+                            throw new InvalidOperationException("Another launch helper is still stopping. Wait for it to finish before trying again.");
+                        active = lifetime;
                     }
                     Stopwatch clock = Stopwatch.StartNew();
-                    helper.BeginOutputReadLine();
-                    if (!helper.WaitForExit(timeoutMs))
+                    helper.Start();
+                    started = true;
+                    lifetime.Attach(helper);
+                    lock (gate)
                     {
-                        Stop();
+                        if (disposed) throw new OperationCanceledException("The launch was canceled during shutdown.");
+                    }
+                    Native.AllowSetForegroundWindow((uint)helper.Id);
+                    helper.BeginOutputReadLine();
+                    // No target lookup or shell request may run before lifetime ownership is established.
+                    helper.StandardInput.WriteLine("GO");
+                    helper.StandardInput.Close();
+                    int remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
+                    if (!helper.WaitForExit(remaining))
+                    {
+                        lifetime.Dispose();
+                        Stop(helper);
                         throw new TimeoutException("Opening the app took too long. The launch helper was stopped. " +
                             "Windows may already have accepted the request; check whether the app opened before trying again.");
                     }
@@ -81,8 +86,10 @@ namespace MD301Plus
                     {
                         if (disposed) throw new OperationCanceledException("The launch helper was stopped during shutdown.");
                     }
-                    int remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
-                    responseReady.WaitOne(remaining);
+                    // Once the helper exits, allow its already-written result to drain independently
+                    // of the operation deadline. EOF also signals a crash without a result.
+                    if (!responseReady.WaitOne(1000))
+                        throw new TimeoutException("The launch helper exited, but Windows did not deliver its result. Check whether the app opened before trying again.");
                     string result;
                     lock (responseGate) result = response;
                     if (result == null)
@@ -93,7 +100,8 @@ namespace MD301Plus
                 {
                     if (started)
                     {
-                        try { Stop(); }
+                        lifetime.Dispose();
+                        try { Stop(helper); }
                         catch (Exception stopError)
                         {
                             throw new InvalidOperationException("The launch helper could not be stopped. Restart MD301 Plus before launching another app.",
@@ -111,45 +119,48 @@ namespace MD301Plus
                     }
                     lock (gate)
                     {
-                        if (!started || helper.HasExited)
-                        {
-                            if (active == helper) active = null;
-                            helper.Dispose();
-                        }
+                        if (active == lifetime) active = null;
                     }
                 }
             }
         }
 
-        private void Stop()
+        private static void Stop(Process helper)
         {
-            lock (gate)
+            if (helper.HasExited) return;
+            try { helper.Kill(); }
+            catch (InvalidOperationException)
             {
-                if (active == null || active.HasExited) return;
-                active.Kill();
-                if (!active.WaitForExit(1000))
-                    throw new TimeoutException("The launch helper did not stop. Restart MD301 Plus before launching another app.");
+                if (!helper.HasExited) throw;
             }
+            catch (Win32Exception)
+            {
+                if (!helper.HasExited) throw;
+            }
+            if (!helper.WaitForExit(1000))
+                throw new TimeoutException("The launch helper did not stop. Restart MD301 Plus before launching another app.");
         }
 
         public void Dispose()
         {
+            LaunchJob lifetime;
             lock (gate)
             {
                 if (disposed) return;
                 disposed = true;
+                lifetime = active;
             }
-            ThreadPool.QueueUserWorkItem(delegate
-            {
-                try { Stop(); }
-                catch (Exception error) { AppLog.Error("Stopping the launch helper during shutdown", error); }
-            });
+            // Closing a kernel handle is immediate; process exit waits remain on the worker.
+            if (lifetime != null) lifetime.Dispose();
         }
+
+        internal static bool WaitForAuthorization() { return Console.ReadLine() == "GO"; }
 
         internal static int RunHelper(string encodedTarget)
         {
             try
             {
+                if (!WaitForAuthorization()) throw new OperationCanceledException("The launch owner exited before authorizing the request.");
                 if (encodedTarget == null || encodedTarget.Length > 8192)
                     throw new SettingsException("The launch helper received an invalid target.");
                 string target = Encoding.UTF8.GetString(Convert.FromBase64String(encodedTarget));

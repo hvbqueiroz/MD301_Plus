@@ -481,13 +481,19 @@ namespace MD301Plus.Tests
             using (MenuInputCapture capture = new MenuInputCapture(delegate { return -1; }, delegate { },
                 delegate { choices++; }, TriggerBinding.Parse("F22")))
             {
-                HashSet<int> inherited = (HashSet<int>)typeof(MenuInputCapture).GetField("inheritedKeys",
-                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(capture);
-                inherited.Add(0x31);
+                capture.SnapshotHeldKeys(delegate(int key) { return key == 0x31; });
                 Check(!capture.Keyboard(0x0100, 0x31, 0) && !capture.Keyboard(0x0101, 0x31, 0) && choices == 0,
                     "A key held before the ring opened keeps its repeats and release in the original app");
                 Check(capture.Keyboard(0x0100, 0x31, 0) && capture.Keyboard(0x0101, 0x31, 0) && choices == 1,
                     "The same key can select on its next fresh press");
+            }
+            using (MenuInputCapture capture = new MenuInputCapture(delegate { return -1; }, delegate { },
+                delegate { choices++; }, TriggerBinding.Parse("F22")))
+            {
+                capture.SnapshotHeldKeys(delegate(int key) { return key == 0x31; });
+                capture.SnapshotHeldKeys(delegate { return false; });
+                Check(capture.Keyboard(0x0100, 0x31, 0) && capture.Keyboard(0x0101, 0x31, 0),
+                    "A key released before the post-install snapshot does not hide its next fresh press");
             }
             Console.WriteLine("PASS: keyboard release ownership, inherited keys, overlapping presses and repeats");
         }
@@ -544,6 +550,58 @@ namespace MD301Plus.Tests
                     "The real helper opens a trusted target with spaces through the desktop shell", 3000);
                 Check(failure == null && File.ReadAllText(marker).Trim() == "helper",
                     "Successful helper completion represents an actual shell launch");
+            }
+            using (LaunchProcess launcher = new LaunchProcess(8000, "--launch-process-probe"))
+            {
+                Stopwatch clock = Stopwatch.StartNew();
+                Throws<InvalidOperationException>(delegate { launcher.Open(Path.Combine(directory, "launch-no-result")); },
+                    "A child exiting without a response reports an explicit failure");
+                Check(clock.ElapsedMilliseconds < 3000, "Stdout EOF reports a missing result without consuming the operation deadline");
+            }
+            using (LaunchProcess launcher = new LaunchProcess(1500, "--launch-process-probe"))
+                launcher.Open(Path.Combine(directory, "launch-near-deadline"));
+            foreach (string kind in new[] { "launch-parent-exit", "launch-parent-crash" })
+            {
+                string targetPath = Path.Combine(directory, kind);
+                string encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(targetPath));
+                using (Process parent = Process.Start(new ProcessStartInfo(typeof(TestRunner).Assembly.Location,
+                    "--launch-parent-probe " + encoded) { UseShellExecute = false, CreateNoWindow = true }))
+                {
+                    try
+                    {
+                        Check(parent.WaitForExit(12000) && parent.ExitCode == 0, "The launch owner actually exits: " + kind);
+                        string marker = targetPath + ".started";
+                        Check(File.Exists(marker), "The parent's blocked helper really started");
+                        int id = int.Parse(File.ReadAllText(marker));
+                        bool exited;
+                        try { using (Process child = Process.GetProcessById(id)) exited = child.WaitForExit(1500); }
+                        catch (ArgumentException) { exited = true; }
+                        Check(exited, "The OS terminates the helper when its parent exits: " + kind);
+                        File.WriteAllText(targetPath + ".release", "release");
+                        Check(!File.Exists(targetPath + ".late"), "An exited parent cannot leave a delayed launch");
+                    }
+                    finally
+                    {
+                        if (!parent.HasExited) { parent.Kill(); parent.WaitForExit(1000); }
+                    }
+                }
+            }
+            string childTarget = Path.Combine(directory, "launch-child");
+            using (LaunchProcess launcher = new LaunchProcess(5000, "--launch-process-probe")) launcher.Open(childTarget);
+            int childId = int.Parse(File.ReadAllText(childTarget + ".child"));
+            using (Process launched = Process.GetProcessById(childId))
+            {
+                try
+                {
+                    Check(!launched.HasExited, "An app launched by the helper escapes its lifetime job");
+                    File.WriteAllText(childTarget + ".release", "release");
+                    Check(launched.WaitForExit(1500) && File.Exists(childTarget + ".finished"),
+                        "Closing the helper job does not terminate the app that was launched");
+                }
+                finally
+                {
+                    if (!launched.HasExited) { launched.Kill(); launched.WaitForExit(1000); }
+                }
             }
             Console.WriteLine("PASS: launch process deadlines, termination, recovery, shutdown and helper error transport");
         }
@@ -607,6 +665,31 @@ namespace MD301Plus.Tests
 
         private static void TestBatteryFailuresAndRollover()
         {
+            string cached = "denied";
+            int percent;
+            int attempts = 0;
+            BatteryQuery query = delegate(string path, out int value)
+            {
+                attempts++;
+                value = 75;
+                if (path == "denied") throw new Win32Exception(5, "battery access probe");
+                return BatteryRead.Ok;
+            };
+            Check(MouseBatteryReader.ReadCollections(out percent, ref cached,
+                delegate { return new List<string> { "denied", "working" }; }, query) == BatteryRead.Ok &&
+                cached == "working" && percent == 75 && attempts == 2,
+                "A denied cached collection is invalidated and another receiver can succeed");
+            cached = null;
+            Check(MouseBatteryReader.ReadCollections(out percent, ref cached,
+                delegate { return new List<string> { "denied", "working" }; }, query) == BatteryRead.Ok && cached == "working",
+                "A bad collection does not abort the remaining receiver candidates");
+            cached = "denied";
+            Throws<Win32Exception>(delegate
+            {
+                MouseBatteryReader.ReadCollections(out percent, ref cached,
+                    delegate { return new List<string> { "denied" }; }, query);
+            }, "The original battery error is reported when no collection works");
+            Check(cached == null, "A failed cached collection is not retried forever");
             foreach (int error in new[] { 2, 3, 433, 1167 })
                 Check(MouseBatteryReader.ClassifyFailure(error, false) == BatteryRead.Missing,
                     "Disconnected devices clear the cached path: " + error);
