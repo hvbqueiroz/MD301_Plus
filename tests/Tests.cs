@@ -65,6 +65,55 @@ namespace MD301Plus.Tests
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == LaunchProcess.HelperArgument) return LaunchProcess.RunHelper(args[1]);
+            if (args.Length == 2 && args[0] == "--instance-process-probe")
+            {
+                using (SettingsRequestWindow window = new SettingsRequestWindow(args[1], Application.ExitThread))
+                    Application.Run();
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-process-probe")
+            {
+                if (!LaunchProcess.WaitForAuthorization()) return 1;
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                string kind = Path.GetFileName(target);
+                if (kind == "launch-no-result") return 3;
+                if (kind == "launch-near-deadline") Thread.Sleep(900);
+                if (kind == "launch-child")
+                {
+                    using (Process child = Process.Start(new ProcessStartInfo(typeof(TestRunner).Assembly.Location,
+                        "--launch-descendant-probe " + args[1]) { UseShellExecute = false, CreateNoWindow = true }))
+                        File.WriteAllText(target + ".child", child.Id.ToString());
+                }
+                else if (kind != "launch-success" && kind != "launch-near-deadline")
+                {
+                    File.WriteAllText(target + ".started", Process.GetCurrentProcess().Id.ToString());
+                    while (!File.Exists(target + ".release")) Thread.Sleep(10);
+                    File.WriteAllText(target + ".late", "unexpected late launch");
+                }
+                Console.WriteLine("OK");
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-descendant-probe")
+            {
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                File.WriteAllText(target + ".alive", "alive");
+                while (!File.Exists(target + ".release")) Thread.Sleep(10);
+                File.WriteAllText(target + ".finished", "finished");
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-parent-probe")
+            {
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                ActionLauncher launcher = new ActionLauncher(new LaunchProcess(30000, "--launch-process-probe"), delegate { });
+                launcher.Open(target);
+                Stopwatch wait = Stopwatch.StartNew();
+                while (!File.Exists(target + ".started") && wait.ElapsedMilliseconds < 10000) Thread.Sleep(10);
+                if (!File.Exists(target + ".started")) { launcher.Dispose(); return 2; }
+                if (Path.GetFileName(target) == "launch-parent-crash") Environment.Exit(0);
+                launcher.Dispose();
+                return 0; // Actually end the parent process, without pumping or joining the launch worker.
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length == 1 && args[0] == "--media-probe")
@@ -72,9 +121,10 @@ namespace MD301Plus.Tests
                 using (MediaProbeForm probe = new MediaProbeForm()) Application.Run(probe);
                 return 0;
             }
-            if (args.Length != 0)
+            bool reliabilityOnly = args.Length == 1 && args[0] == "--reliability";
+            if (args.Length != 0 && !reliabilityOnly)
             {
-                Console.Error.WriteLine("Unknown test-runner arguments.");
+                Console.Error.WriteLine("Unknown test-runner arguments: " + string.Join(", ", args));
                 return 2;
             }
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-data-" + Guid.NewGuid().ToString("N"));
@@ -82,6 +132,18 @@ namespace MD301Plus.Tests
             AppLog.FilePath = Path.Combine(directory, "app.log");
             try
             {
+                if (reliabilityOnly)
+                {
+                    TestStability(directory);
+                    TestMouseBindings();
+                    TestNativeMediaDelivery();
+                    TestNativeWindows();
+                    TestShellLauncher(directory);
+                    TestApplicationSettings(directory);
+                    TestWindowsShutdown(directory);
+                    Console.WriteLine("PASS: " + assertions + " reliability assertions.");
+                    return 0;
+                }
                 TestShortcuts();
                 TestApplicationIcon();
                 TestVersion();
@@ -285,10 +347,11 @@ namespace MD301Plus.Tests
             Throws<SettingsException>(bad.Validate, "Reject unsupported settings versions");
 
             foreach (string valid in new[] { @"C:\Windows\notepad.exe", @"C:\Program Files\Creative App\app.exe",
-                @"\\server\share\file.txt", "https://example.com/page?q=hello", "http://localhost:8000/" })
+                @"\\server\share\file.txt", "https://example.com/page?q=hello", "http://localhost:8000/", "spotify:", "SPOTIFY:" })
                 RingAction.ValidateLaunchTarget(valid);
             foreach (string invalid in new[] { "", "notepad.exe", @"C:relative.exe", @"\relative.exe",
-                "cmd.exe /c echo test", "javascript:alert(1)", "file:///C:/Windows/notepad.exe" })
+                "cmd.exe /c echo test", "javascript:alert(1)", "file:///C:/Windows/notepad.exe",
+                "spotify:arbitrary-command", "spotify://other", "unknown:" })
             {
                 string value = invalid;
                 Throws<SettingsException>(delegate { RingAction.ValidateLaunchTarget(value); }, "Reject unsafe/relative launch target: " + value);
@@ -308,6 +371,21 @@ namespace MD301Plus.Tests
             store.Save(loaded);
             Check(store.Load().Actions[2].Kind == "settings" && store.Load().Actions[2].Command == "",
                 "The built-in Settings shortcut persists without an installation-specific path");
+            RingSettings media = defaults.Copy();
+            media.Actions = RingSettings.Preset("Media");
+            media.Actions[2] = new RingAction { Label = "Media app", Kind = "shortcut", Command = "MediaSelect", Icon = "launch" };
+            media.Actions[4] = media.Actions[2].Copy();
+            media.Actions[4].Label = "My default player";
+            store.Save(media);
+            string legacyJson = File.ReadAllText(path);
+            RingSettings upgraded = store.Load();
+            Check(upgraded.Actions[2].Kind == "launch" && upgraded.Actions[2].Command == "spotify:" &&
+                upgraded.Actions[2].Label == "Spotify", "The old Media app preset opens Spotify in its saved ring position");
+            Check(upgraded.Actions[4].Kind == "shortcut" && upgraded.Actions[4].Command == "MediaSelect",
+                "Custom default-player shortcuts are not changed");
+            Check(File.ReadAllText(path) == legacyJson, "Loading the upgraded preset does not rewrite settings");
+            store.Save(upgraded);
+            Check(store.Load().Actions[2].Command == "spotify:", "The Spotify launcher persists after saving");
             RingAction invalidSettings = RingAction.OpenSettings();
             invalidSettings.Command = "unexpected";
             Throws<SettingsException>(delegate { invalidSettings.Validate(0); }, "Settings action rejects arbitrary commands");
@@ -464,6 +542,9 @@ namespace MD301Plus.Tests
                 settings.Validate();
                 Check(settings.Actions.Count == 8, "Exactly eight actions in " + name + " preset");
             }
+            RingAction spotify = RingSettings.Preset("Media")[7];
+            Check(spotify.Label == "Spotify" && spotify.Kind == "launch" && spotify.Command == "spotify:",
+                "The Media palette launches Spotify rather than Windows' default media player");
             Throws<SettingsException>(delegate { RingSettings.Preset("unknown"); }, "Unknown presets are rejected");
             Console.WriteLine("PASS: native Windows/media VK codes, aliases, balanced events and three eight-slot presets");
         }
@@ -810,13 +891,20 @@ namespace MD301Plus.Tests
                 Check(selected.Height <= selected.Parent.ClientSize.Height, "Selected-action summary stays within its row");
                 CheckStartupFooter(form);
                 FlowLayoutPanel assignment = (FlowLayoutPanel)form.Controls.Find("ButtonAssignment", true)[0];
+                // DeviceDpi can retain 96 while WinForms has already scaled controls to the system DPI.
+                float displayScale = form.CurrentAutoScaleDimensions.Width / 96f;
+                // Size the layout directly: Windows caps native windows on small CI screens.
+                layout.Dock = DockStyle.None;
+                layout.Size = new Size((int)(1240 * displayScale), (int)(880 * displayScale));
+                Application.DoEvents();
                 Check(!assignment.VerticalScroll.Visible, "Moving startup out of the button group removes its default-size scrollbar");
-                using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
+                CheckStartupFooter(form);
+                using (Bitmap image = new Bitmap(layout.Width, layout.Height))
                 {
-                    form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
+                    layout.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
                     image.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-preview.png"), ImageFormat.Png);
                 }
-                float displayScale = form.DeviceDpi / 96f;
+                layout.Dock = DockStyle.Fill;
                 form.Size = new Size((int)(1040 * displayScale), (int)(720 * displayScale));
                 Application.DoEvents();
                 Rectangle editorBounds = ring.RectangleToScreen(ring.ClientRectangle);
@@ -830,6 +918,13 @@ namespace MD301Plus.Tests
                 }
                 CheckHeaderFits(header);
                 CheckStartupFooter(form);
+                Control gearLink = form.Controls.Find("OpenGearLink", true)[0];
+                assignment.ScrollControlIntoView(gearLink);
+                Application.DoEvents();
+                Check(assignment.ClientRectangle.Contains(gearLink.Bounds),
+                    "The compact layout can scroll to the DPI setup button");
+                Check(!assignment.HorizontalScroll.Visible,
+                    "The compact button assignment panel does not need horizontal scrolling");
                 using (Bitmap image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                 {
                     form.Controls[0].DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
@@ -1390,10 +1485,10 @@ namespace MD301Plus.Tests
             }
         }
 
-        private static void PumpUntil(Func<bool> done, string message)
+        private static void PumpUntil(Func<bool> done, string message, int timeoutMs = 1500)
         {
             Stopwatch timeout = Stopwatch.StartNew();
-            while (!done() && timeout.ElapsedMilliseconds < 1500)
+            while (!done() && timeout.ElapsedMilliseconds < timeoutMs)
             {
                 Application.DoEvents();
                 Thread.Sleep(1);

@@ -63,7 +63,7 @@ namespace MD301Plus
             Label help = new Label
             {
                 Dock = DockStyle.Fill, ForeColor = Theme.Muted,
-                Text = "Examples: Ctrl+Shift+S, Win+E, MediaPlayPause, VolumeUp.\r\nFor a launcher, enter an absolute path or an HTTP(S) URL.\r\nOpening MD301 Plus settings needs no command."
+                Text = "Examples: Ctrl+Shift+S, Win+E, MediaPlayPause, VolumeUp.\r\nLaunchers: absolute path, HTTP(S) URL, or spotify:.\r\nOpening MD301 Plus settings needs no command."
             };
             layout.Controls.Add(help, 0, 4);
             layout.SetColumnSpan(help, 2);

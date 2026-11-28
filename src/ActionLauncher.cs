@@ -11,10 +11,17 @@ namespace MD301Plus
         private readonly Action<string> launch;
         private readonly Func<string, bool> exists;
         private readonly Action<Exception> completed;
+        private readonly LaunchProcess isolated;
         private int busy;
         private volatile bool disposed;
 
-        internal ActionLauncher(Action<Exception> completed) : this(ShellLauncher.Open, completed) { }
+        internal ActionLauncher(Action<Exception> completed) : this(new LaunchProcess(), completed) { }
+
+        internal ActionLauncher(LaunchProcess isolated, Action<Exception> completed)
+            : this(isolated.Open, completed, delegate { return true; })
+        {
+            this.isolated = isolated;
+        }
 
         internal ActionLauncher(Action<string> launch, Action<Exception> completed, Func<string, bool> exists = null)
         {
@@ -50,12 +57,12 @@ namespace MD301Plus
             {
                 try
                 {
-                    RingAction.ValidateLaunchTarget(target);
-                    Uri url;
-                    bool web = Uri.TryCreate(target, UriKind.Absolute, out url) &&
-                        (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps);
-                    if (!web && !exists(target))
-                        throw new FileNotFoundException("The launch target does not exist: " + target);
+                    if (isolated == null)
+                    {
+                        RingAction.ValidateLaunchTarget(target);
+                        if (!RingAction.IsUriLaunchTarget(target) && !exists(target))
+                            throw new FileNotFoundException("The launch target does not exist: " + target);
+                    }
                     if (!disposed) launch(target);
                 }
                 // This boundary must report failures on the UI thread, not terminate the process from a worker.
@@ -74,6 +81,10 @@ namespace MD301Plus
             }
         }
 
-        public void Dispose() { disposed = true; }
+        public void Dispose()
+        {
+            disposed = true;
+            if (isolated != null) isolated.Dispose();
+        }
     }
 }

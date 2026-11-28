@@ -8,7 +8,9 @@ param(
     [string]$MakeAppx,
     [string]$PackageIdentityName,
     [string]$PackagePublisher,
-    [string]$PackagePublisherDisplayName
+    [string]$PackagePublisherDisplayName,
+    [ValidateSet('All', 'Reliability')]
+    [string]$TestScope = 'All'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,7 +68,9 @@ if ($Test) {
         throw 'Test compilation failed.'
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'src\MD301Plus.exe.config') -Destination ($testExe + '.config')
-    & $testExe
+    $testArguments = @()
+    if ($TestScope -eq 'Reliability') { $testArguments = @('--reliability') }
+    & $testExe @testArguments
     if ($LASTEXITCODE -ne 0) {
         throw 'Tests failed.'
     }

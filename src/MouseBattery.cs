@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -11,6 +13,7 @@ namespace MD301Plus
     internal enum BatteryRead { Ok, Asleep, Missing, Failed, Pending }
 
     internal delegate BatteryRead BatterySource(out int percent);
+    internal delegate BatteryRead BatteryQuery(string path, out int percent);
 
     internal sealed class BatteryReading
     {
@@ -100,24 +103,45 @@ namespace MD301Plus
 
         internal static BatteryRead Read(out int percent)
         {
+            return ReadCollections(out percent, ref cachedPath, FindCollections, Query);
+        }
+
+        internal static BatteryRead ReadCollections(out int percent, ref string cached,
+            Func<List<string>> collections, BatteryQuery query)
+        {
             percent = MouseBattery.Unknown;
-            string path = cachedPath;
+            string path = cached;
+            Exception failure = null;
             if (path != null)
             {
-                BatteryRead cached = Query(path, out percent);
-                if (cached != BatteryRead.Missing) return cached;
-                cachedPath = null;
+                try
+                {
+                    BatteryRead cachedResult = query(path, out percent);
+                    if (cachedResult != BatteryRead.Missing) return cachedResult;
+                }
+                catch (Win32Exception error) { failure = error; }
+                catch (IOException error) { failure = error; }
+                cached = null;
             }
             BatteryRead result = BatteryRead.Missing;
-            foreach (string candidate in FindCollections())
+            foreach (string candidate in collections())
             {
+                if (candidate == path) continue;
                 int value;
-                BatteryRead read = Query(candidate, out value);
+                BatteryRead read;
+                try { read = query(candidate, out value); }
+                catch (Win32Exception error) { if (failure == null) failure = error; continue; }
+                catch (IOException error) { if (failure == null) failure = error; continue; }
                 if (read == BatteryRead.Missing) continue;
-                cachedPath = candidate;
+                cached = candidate;
                 result = read;
                 percent = value;
-                if (read == BatteryRead.Ok) break;
+                if (read == BatteryRead.Ok) return read;
+            }
+            if (failure != null)
+            {
+                cached = null;
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
             }
             return result;
         }
@@ -128,13 +152,19 @@ namespace MD301Plus
             Guid hidClass;
             HidD_GetHidGuid(out hidClass);
             IntPtr set = SetupDiGetClassDevs(ref hidClass, IntPtr.Zero, IntPtr.Zero, 0x12);
-            if (set == new IntPtr(-1)) return result;
+            if (set == new IntPtr(-1))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot enumerate HID devices.");
             try
             {
                 for (int index = 0; ; index++)
                 {
                     DeviceInterfaceData item = new DeviceInterfaceData(Marshal.SizeOf(typeof(DeviceInterfaceData)));
-                    if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidClass, index, ref item)) break;
+                    if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidClass, index, ref item))
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        if (error == 259) break; // ERROR_NO_MORE_ITEMS
+                        throw new Win32Exception(error, "Cannot enumerate a HID device interface.");
+                    }
                     string path = InterfacePath(set, ref item);
                     if (path != null && path.IndexOf("0b05", StringComparison.OrdinalIgnoreCase) >= 0 && IsMd301Protocol(path))
                         result.Add(path);
@@ -148,13 +178,26 @@ namespace MD301Plus
         {
             int required;
             SetupDiGetDeviceInterfaceDetail(set, ref item, IntPtr.Zero, 0, out required, IntPtr.Zero);
-            if (required <= 4) return null;
+            int error = Marshal.GetLastWin32Error();
+            if (error != 122)
+            {
+                if (ClassifyFailure(error, false) != BatteryRead.Missing)
+                    throw new Win32Exception(error, "Cannot read a HID device interface.");
+                return null; // A device disconnected during enumeration.
+            }
+            if (required <= 4) throw new IOException("Windows returned an invalid HID device interface size.");
             IntPtr detail = Marshal.AllocHGlobal(required);
             try
             {
                 // SP_DEVICE_INTERFACE_DETAIL_DATA_W.cbSize: 8 on 64-bit, 6 on 32-bit.
                 Marshal.WriteInt32(detail, IntPtr.Size == 8 ? 8 : 6);
-                if (!SetupDiGetDeviceInterfaceDetail(set, ref item, detail, required, out required, IntPtr.Zero)) return null;
+                if (!SetupDiGetDeviceInterfaceDetail(set, ref item, detail, required, out required, IntPtr.Zero))
+                {
+                    error = Marshal.GetLastWin32Error();
+                    if (ClassifyFailure(error, false) != BatteryRead.Missing)
+                        throw new Win32Exception(error, "Cannot read a HID device interface.");
+                    return null;
+                }
                 return Marshal.PtrToStringUni(new IntPtr(detail.ToInt64() + 4));
             }
             finally { Marshal.FreeHGlobal(detail); }
@@ -189,7 +232,7 @@ namespace MD301Plus
             percent = MouseBattery.Unknown;
             using (SafeFileHandle handle = CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero))
             {
-                if (handle.IsInvalid) return BatteryRead.Missing;
+                if (handle.IsInvalid) return ClassifyFailure(Marshal.GetLastWin32Error(), false);
                 // The vendor collection only answers on a synchronous handle, so a watchdog cancels blocked I/O.
                 using (System.Threading.Timer watchdog = new System.Threading.Timer(delegate
                 {
@@ -199,11 +242,13 @@ namespace MD301Plus
                 {
                     Stopwatch clock = Stopwatch.StartNew();
                     byte[] request = BuildRequest();
-                    if (!Transfer(true, handle, request, watchdog, clock)) return BatteryRead.Asleep;
+                    BatteryRead transfer = Transfer(true, handle, request, watchdog, clock);
+                    if (transfer != BatteryRead.Ok) return transfer;
                     for (int attempt = 0; attempt < 8; attempt++)
                     {
                         byte[] report = new byte[ReportLength];
-                        if (!Transfer(false, handle, report, watchdog, clock)) return BatteryRead.Asleep;
+                        transfer = Transfer(false, handle, report, watchdog, clock);
+                        if (transfer != BatteryRead.Ok) return transfer;
                         if (IsUnavailable(report)) return BatteryRead.Asleep;
                         if (!IsBatteryEcho(report)) continue;
                         percent = ParseResponse(report);
@@ -214,18 +259,27 @@ namespace MD301Plus
             }
         }
 
-        private static bool Transfer(bool write, SafeFileHandle handle, byte[] buffer,
+        internal static BatteryRead ClassifyFailure(int error, bool timedOut)
+        {
+            if (error == 2 || error == 3 || error == 433 || error == 1167) return BatteryRead.Missing;
+            if (error == 121 || error == 1460 || (error == 995 && timedOut)) return BatteryRead.Asleep;
+            throw new Win32Exception(error, "The MD301 battery query failed (Windows error " + error + ").");
+        }
+
+        private static BatteryRead Transfer(bool write, SafeFileHandle handle, byte[] buffer,
             System.Threading.Timer watchdog, Stopwatch clock)
         {
             long remaining = TimeoutMs - clock.ElapsedMilliseconds;
-            if (remaining <= 0) return false;
+            if (remaining <= 0) return BatteryRead.Asleep;
             watchdog.Change(remaining, Timeout.Infinite);
             try
             {
                 int count;
                 bool ok = write ? WriteFile(handle, buffer, buffer.Length, out count, IntPtr.Zero) :
                     ReadFile(handle, buffer, buffer.Length, out count, IntPtr.Zero);
-                return ok && count == buffer.Length;
+                if (!ok) return ClassifyFailure(Marshal.GetLastWin32Error(), clock.ElapsedMilliseconds >= TimeoutMs);
+                if (count != buffer.Length) throw new IOException("The MD301 battery query returned an incomplete HID report.");
+                return BatteryRead.Ok;
             }
             finally { watchdog.Change(Timeout.Infinite, Timeout.Infinite); }
         }
@@ -323,6 +377,7 @@ namespace MD301Plus
         private const int RefreshThrottleMs = 5000;
         private readonly BatterySource source;
         private readonly Func<DateTime> utcNow;
+        private readonly Func<int> tickCount;
         private readonly SynchronizationContext context;
         private readonly System.Threading.Timer timer;
         private volatile BatteryReading reading;
@@ -336,13 +391,14 @@ namespace MD301Plus
         {
         }
 
-        internal MouseBattery(BatterySource source, bool poll, Func<DateTime> utcNow = null)
+        internal MouseBattery(BatterySource source, bool poll, Func<DateTime> utcNow = null, Func<int> tickCount = null)
         {
             this.source = source;
             this.utcNow = utcNow ?? delegate { return DateTime.UtcNow; };
+            this.tickCount = tickCount ?? delegate { return Environment.TickCount; };
             reading = new BatteryReading(Unknown, BatteryRead.Pending, null, this.utcNow);
             context = new WindowsFormsSynchronizationContext();
-            lastRefresh = Environment.TickCount - RefreshThrottleMs;
+            lastRefresh = unchecked(this.tickCount() - RefreshThrottleMs);
             timer = new System.Threading.Timer(delegate { Poll(); }, null,
                 poll ? 0 : Timeout.Infinite, poll ? PollMs : Timeout.Infinite);
         }
@@ -352,8 +408,9 @@ namespace MD301Plus
 
         internal void Refresh()
         {
-            if (disposed || unchecked(Environment.TickCount - lastRefresh) < RefreshThrottleMs) return;
-            lastRefresh = Environment.TickCount;
+            int now = tickCount();
+            if (disposed || unchecked(now - lastRefresh) < RefreshThrottleMs) return;
+            lastRefresh = now;
             ThreadPool.QueueUserWorkItem(delegate { Poll(); });
         }
 

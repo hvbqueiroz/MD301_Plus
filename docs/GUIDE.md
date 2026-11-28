@@ -349,7 +349,7 @@ button assignment. Only DPI/keyboard-mode triggers need a matching Gear Link map
 
 ### Native media and Windows controls
 
-Choose **Media** in the action palette for these eight native Windows keys:
+Choose **Media** in the action palette for seven native Windows keys and a Spotify launcher:
 
 | Action | Command |
 |---|---|
@@ -360,15 +360,20 @@ Choose **Media** in the action palette for these eight native Windows keys:
 | Volume down | `VolumeDown` |
 | Mute | `VolumeMute` |
 | Stop | `MediaStop` |
-| Open default media app | `MediaSelect` |
+| Spotify | `spotify:` (`launch`) |
 
-These are normal `shortcut` actions without modifiers. They control Windows
+The first seven are normal `shortcut` actions without modifiers. They control Windows
 volume and the active media session, rather than sending spacebar or a
 player-specific shortcut to the foreground app. Playback needs a player that
-handles Windows media keys; MediaSelect depends on an installed/default handler.
+handles Windows media keys. **Spotify** opens the installed Spotify app through
+its registered `spotify:` URI, rather than Windows' default media player.
+Spotify must be installed; a missing handler reports a launch error.
+Existing unchanged **Media app** preset actions are upgraded on load without
+moving ring positions or changing custom default-player shortcuts.
 Volume changes by the normal Windows media-key increment per activation.
 Aliases `PlayPause`, `NextTrack`, `PreviousTrack`, `PrevTrack`, `Mute`, `Stop`,
-and `LaunchMedia` are also accepted.
+and `LaunchMedia` are also accepted. `MediaSelect` (alias `LaunchMedia`) remains
+available for custom shortcuts that deliberately open Windows' default media app.
 
 The **Windows** preset provides Task view (`Win+Tab`), Desktop (`Win+D`),
 Explorer (`Win+E`), Settings (`Win+I`), Clipboard history (`Win+V`),
@@ -386,7 +391,8 @@ requirements still apply, such as enabling clipboard history.
   BrowserFavorites, BrowserHome, LaunchMail, LaunchApp1, and LaunchApp2 are
   supported too. A keyboard-mode trigger needs a modifier or a single function key.
 - `launch`: an absolute app/file/folder path such as
-  `C:\Windows\System32\notepad.exe`, or an HTTP(S) URL. There is no shell-command
+  `C:\Windows\System32\notepad.exe`, an HTTP(S) URL, or `spotify:` to open Spotify.
+  There is no shell-command
   interpreter or separate command-line-arguments field. Use only trusted local
   files and shortcuts.
 
@@ -414,9 +420,18 @@ requirements still apply, such as enabling clipboard history.
   changing the saved assignment. Menu selection listeners run only while the
   ring is visible; keyboard-only mode has no persistent mouse listener.
   Low-level listeners have their own message-loop threads, so editing, saving,
-  or opening an app cannot stall them. Application launches and Gear Link
-  browser requests run on background STA threads; a slow launch does not queue
-  more delayed launches or freeze the editor.
+  or opening an app cannot stall them. Input listener startup has a two-second
+  deadline; shutdown releases hooks on their owning thread without waiting on
+  the editor. A listener still stopping must finish before a replacement starts.
+  Number keys and Escape already held when the ring opens stay with the original
+  app until released; only a fresh captured press/release selects an action.
+  Application launches and Gear Link browser requests use an isolated STA helper
+  process. Windows binds the helper to the tray process's lifetime before it can
+  check the target or issue a shell request, so exiting or crashing MD301 Plus
+  cannot leave a helper to launch an app later. Apps already launched are not
+  terminated with the helper. A launch taking more than ten seconds stops that helper and reports
+  an error, without queuing delayed launches. Windows may already have accepted
+  the request, so check whether the target opened before trying again.
   There is no key history, telemetry, network service, or firmware modification.
   The app itself writes no registry keys. The installer adds the Start menu
   shortcut, the Installed apps entry, and the optional sign-in entry under
@@ -446,6 +461,14 @@ requirements still apply, such as enabling clipboard history.
   to the ring instead of through the menu listener. It records app process and window class
   names, never window titles. The log is capped at about 512 KB, plus one older
   copy (`app.log.old`).
+- Launching another installed copy still opens Settings in the running instance
+  to avoid duplicate global listeners. If its build, installation path, or Store
+  identity differs, a notice explains which copy is running and how to switch.
+  Older copies without build identification are explicitly marked unidentified.
+  Battery access and driver errors are reported as failed reads, not as a sleeping
+  mouse; an inaccessible collection is discarded and other compatible collections
+  are tried before reporting failure. Repeated failures are logged once until the
+  connection recovers.
 - Elevated applications, UAC/secure desktops, games, and apps that reject
   simulated input can block shortcuts. The app does not bypass these boundaries.
   Windows accepting injected keys does not guarantee that a particular app
@@ -475,6 +498,14 @@ requirements still apply, such as enabling clipboard history.
 .\build.ps1 -Test
 ```
 
+For the focused input, launcher, battery, and lifecycle regressions:
+
+```powershell
+.\build.ps1 -Test -TestScope Reliability
+```
+
+The default `-Test` command still runs the entire suite.
+
 To build while the current executable is running:
 
 ```powershell
@@ -490,8 +521,10 @@ transactional settings/binding rollback, full tray startup/shutdown, the version
 shown in Settings and the tray, and a real non-activating overlay.
 Stability regressions also cover concurrent logging, backup/recovery failures,
 palette Enter routing, native hooks during a UI stall, cross-thread menu
-dispatch, slow/failed launches, shutdown cancellation, Store launch isolation,
-partial input delivery and modifier cleanup, and battery freshness/reconnects.
+dispatch, keyboard release ownership, bounded startup/cleanup, terminated launch
+helpers and recovery, shutdown cancellation, Store launch isolation, running-copy
+identification, partial input delivery and modifier cleanup, and battery
+freshness/reconnects and uptime rollover.
 The native stall check uses paired one-pixel mouse moves without clicks or
 scrolls. The suite briefly
 displays inert settings and ring windows,
