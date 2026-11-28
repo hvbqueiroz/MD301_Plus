@@ -72,8 +72,7 @@ namespace MD301Plus
                     Native.AllowSetForegroundWindow((uint)helper.Id);
                     helper.BeginOutputReadLine();
                     // No target lookup or shell request may run before lifetime ownership is established.
-                    helper.StandardInput.WriteLine("GO");
-                    helper.StandardInput.Close();
+                    using (Stream authorization = helper.StandardInput.BaseStream) authorization.WriteByte(1);
                     int remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
                     if (!helper.WaitForExit(remaining))
                     {
@@ -154,7 +153,10 @@ namespace MD301Plus
             if (lifetime != null) lifetime.Dispose();
         }
 
-        internal static bool WaitForAuthorization() { return Console.ReadLine() == "GO"; }
+        internal static bool WaitForAuthorization()
+        {
+            using (Stream authorization = Console.OpenStandardInput()) return authorization.ReadByte() == 1;
+        }
 
         internal static int RunHelper(string encodedTarget)
         {
