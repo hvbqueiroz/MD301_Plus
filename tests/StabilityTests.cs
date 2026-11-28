@@ -508,7 +508,8 @@ namespace MD301Plus.Tests
             {
                 launcher.Open(target);
                 PumpUntil(delegate { return completions == 1; }, "A permanently blocked helper reports its deadline", 3000);
-                Check(failure is TimeoutException && !launcher.IsBusy, "A stalled helper times out and releases the launch slot");
+                Check(failure is TimeoutException && !launcher.IsBusy,
+                    "A stalled helper times out and releases the launch slot (failure: " + failure + ")");
                 string started = target + ".started";
                 Check(File.Exists(started), "The isolated timeout probe actually started");
                 int processId = int.Parse(File.ReadAllText(started));
