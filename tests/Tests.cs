@@ -891,7 +891,8 @@ namespace MD301Plus.Tests
                 Check(selected.Height <= selected.Parent.ClientSize.Height, "Selected-action summary stays within its row");
                 CheckStartupFooter(form);
                 FlowLayoutPanel assignment = (FlowLayoutPanel)form.Controls.Find("ButtonAssignment", true)[0];
-                float displayScale = form.DeviceDpi / 96f;
+                // DeviceDpi can retain 96 while WinForms has already scaled controls to the system DPI.
+                float displayScale = form.CurrentAutoScaleDimensions.Width / 96f;
                 // Size the layout directly: Windows caps native windows on small CI screens.
                 layout.Dock = DockStyle.None;
                 layout.Size = new Size((int)(1240 * displayScale), (int)(880 * displayScale));
