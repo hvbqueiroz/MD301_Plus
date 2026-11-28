@@ -500,6 +500,18 @@ namespace MD301Plus.Tests
 
         private static void TestLaunchProcess(string directory)
         {
+            foreach (System.Text.Encoding encoding in new System.Text.Encoding[]
+                { new System.Text.UTF8Encoding(false), new System.Text.UTF8Encoding(true), System.Text.Encoding.Unicode })
+            {
+                MemoryStream pipe = new MemoryStream();
+                byte[] preamble = encoding.GetPreamble(), text = encoding.GetBytes("GO\r\n");
+                pipe.Write(preamble, 0, preamble.Length);
+                pipe.Write(text, 0, text.Length);
+                pipe.Position = 0;
+                Check(LaunchProcess.ReadAuthorization(pipe), "Helper authorization handles redirected encoding " + encoding.WebName +
+                    " with preamble length " + preamble.Length);
+            }
+            Check(!LaunchProcess.ReadAuthorization(new MemoryStream()), "An owner exiting before authorization cannot permit a launch");
             string target = Path.Combine(directory, "launch-blocked");
             int completions = 0;
             Exception failure = null;

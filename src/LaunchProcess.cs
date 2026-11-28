@@ -72,7 +72,8 @@ namespace MD301Plus
                     Native.AllowSetForegroundWindow((uint)helper.Id);
                     helper.BeginOutputReadLine();
                     // No target lookup or shell request may run before lifetime ownership is established.
-                    using (Stream authorization = helper.StandardInput.BaseStream) authorization.WriteByte(1);
+                    helper.StandardInput.WriteLine("GO");
+                    helper.StandardInput.Close();
                     int remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
                     if (!helper.WaitForExit(remaining))
                     {
@@ -155,7 +156,14 @@ namespace MD301Plus
 
         internal static bool WaitForAuthorization()
         {
-            using (Stream authorization = Console.OpenStandardInput()) return authorization.ReadByte() == 1;
+            return ReadAuthorization(Console.OpenStandardInput());
+        }
+
+        internal static bool ReadAuthorization(Stream stream)
+        {
+            // Process.StandardInput may emit a BOM when its writer is created. Console.In does
+            // not detect that redirected encoding; use an explicit BOM-aware reader instead.
+            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8, true)) return reader.ReadLine() == "GO";
         }
 
         internal static int RunHelper(string encodedTarget)
