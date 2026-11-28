@@ -11,6 +11,15 @@ namespace MD301Plus
         internal static readonly string Version = ReadVersion();
 
         internal static string DisplayVersion { get { return FormatVersion(ShellLauncher.IsPackaged); } }
+        internal static string InstanceIdentity
+        {
+            get
+            {
+                return DisplayVersion + (ShellLauncher.IsPackaged ? "" : " (desktop/portable)") +
+                    "\r\nBuild " + typeof(AppInfo).Assembly.ManifestModule.ModuleVersionId.ToString("N") +
+                    "\r\n" + typeof(AppInfo).Assembly.Location;
+            }
+        }
 
         // Partner Center and Installed apps show the Store package as this version plus ".0".
         internal static string FormatVersion(bool packaged)

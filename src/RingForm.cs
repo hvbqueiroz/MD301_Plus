@@ -382,9 +382,23 @@ namespace MD301Plus
                 if (wasPreview && mediaActive && action != null && action.Kind == "shortcut" &&
                     KeyboardShortcut.Parse(action.Command, false).IsMediaKey)
                     wasPreview = false;
+                MenuInputCapture previous = capture;
                 CloseMenu();
-                Action<RingAction, IntPtr, bool> handler = ActionChosen;
-                if (action != null && handler != null) handler(action, target, wasPreview);
+                int closedGeneration = generation;
+                Action<bool> deliver = delegate(bool stopped)
+                {
+                    if (IsDisposed || generation != closedGeneration) return;
+                    if (!stopped)
+                    {
+                        AppLog.ShowError(null, "Cannot finish action",
+                            new TimeoutException("The input listener has not stopped. The selected action was canceled; try again after it stops, or restart MD301 Plus."));
+                        return;
+                    }
+                    Action<RingAction, IntPtr, bool> handler = ActionChosen;
+                    if (action != null && handler != null) handler(action, target, wasPreview);
+                };
+                if (previous == null) deliver(true);
+                else previous.WhenStopped(deliver);
             }));
         }
 

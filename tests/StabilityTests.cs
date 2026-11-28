@@ -36,11 +36,15 @@ namespace MD301Plus.Tests
             TestPaletteEnter();
             TestHookThread();
             TestMenuThreadDispatch();
+            TestMenuKeyboardOwnership();
             TestLaunchWorker(directory);
+            TestLaunchProcess(directory);
+            TestInstanceIdentity();
             TestGearLinkLaunchState();
             TestStoreLaunchPolicy();
             TestPartialInputDelivery();
             TestBatteryFreshness();
+            TestBatteryFailuresAndRollover();
         }
 
         private static void TestConcurrentLogging()
@@ -218,7 +222,8 @@ namespace MD301Plus.Tests
                     " (sender finished=" + finished + ", accepted=" + accepted + ", callbacks=" + callbacks + ")");
                 Check(callbackThread == installed, "Hook callbacks stay on their installing thread");
                 worker.Dispose();
-                Check(!worker.IsRunning && released == installed, "Disposal releases hooks on their own thread and joins it");
+                WaitWithoutPumping(delegate { return worker.IsStopped; }, "The input thread releases its hooks asynchronously");
+                Check(!worker.IsRunning && released == installed, "Disposal releases hooks on their own thread");
             }
             GC.KeepAlive(callback);
             bool cleaned = false;
@@ -236,8 +241,60 @@ namespace MD301Plus.Tests
                 Check(!reentered, "Starting an input thread does not pump queued UI actions");
                 worker.Dispose();
                 Check(!reentered, "Stopping an input thread cannot reenter ring creation or disposal");
+                WaitWithoutPumping(delegate { return worker.IsStopped; }, "The input thread finishes without pumping UI messages");
             }
             PumpUntil(delegate { return reentered; }, "Queued UI work resumes after input-thread cleanup");
+            using (ManualResetEvent entered = new ManualResetEvent(false))
+            using (ManualResetEvent finishInstall = new ManualResetEvent(false))
+            using (ManualResetEvent cleanedUp = new ManualResetEvent(false))
+            {
+                Stopwatch clock = Stopwatch.StartNew();
+                try
+                {
+                    Throws<Win32Exception>(delegate
+                    {
+                        new HookThread(delegate
+                        {
+                            entered.Set();
+                            finishInstall.WaitOne();
+                        }, delegate { cleanedUp.Set(); }, 200);
+                    }, "Input startup has a bounded deadline");
+                    Check(clock.ElapsedMilliseconds < 1500 && entered.WaitOne(500),
+                        "A stuck installation cannot wait indefinitely on the UI");
+                    bool duplicate = false;
+                    Throws<Win32Exception>(delegate
+                    {
+                        new HookThread(delegate { duplicate = true; }, delegate { }, 50);
+                    }, "A stalled listener cannot accumulate replacement threads");
+                    Check(!duplicate, "Replacement hooks are not installed while partial cleanup is outstanding");
+                }
+                finally { finishInstall.Set(); }
+                Check(cleanedUp.WaitOne(1500), "A late installation releases its resources rather than starting a message loop");
+            }
+            using (ManualResetEvent releasing = new ManualResetEvent(false))
+            using (ManualResetEvent finishRelease = new ManualResetEvent(false))
+            using (HookThread worker = new HookThread(delegate { }, delegate
+            {
+                releasing.Set();
+                finishRelease.WaitOne();
+            }))
+            {
+                try
+                {
+                    Stopwatch clock = Stopwatch.StartNew();
+                    worker.Dispose();
+                    Check(clock.ElapsedMilliseconds < 500 && releasing.WaitOne(1500),
+                        "Slow native cleanup does not block Dispose on the UI");
+                    Check(!worker.IsRunning && !worker.IsStopped, "A closing listener is immediately inactive but still owns its cleanup");
+                    int cleanupCallbacks = 0;
+                    bool stopped = true;
+                    worker.WhenStopped(delegate(bool finished) { stopped = finished; cleanupCallbacks++; });
+                    PumpUntil(delegate { return cleanupCallbacks == 1; }, "Cleanup completion has its own bounded deadline", 3000);
+                    Check(!stopped && !worker.IsStopped, "Timed-out cleanup cannot report a ready-to-deliver action");
+                }
+                finally { finishRelease.Set(); }
+                WaitWithoutPumping(delegate { return worker.IsStopped; }, "Slow cleanup eventually finishes");
+            }
             Console.WriteLine("PASS: input-thread isolation through a UI stall, native callbacks and startup/shutdown cleanup");
         }
 
@@ -399,6 +456,183 @@ namespace MD301Plus.Tests
                 Check(afterClose == 0, "Finishing a path lookup after shutdown cannot open a delayed application");
             }
             Console.WriteLine("PASS: asynchronous STA launches, bounded work, explicit failures and shutdown-safe callbacks");
+        }
+
+        private static void TestMenuKeyboardOwnership()
+        {
+            foreach (int key in new[] { 0x31, 0x38, 0x61, 0x68, 0x1B })
+            {
+                int selected = -2;
+                using (MenuInputCapture capture = new MenuInputCapture(delegate { return -1; }, delegate { },
+                    delegate(int index) { selected = index; }, TriggerBinding.Parse("F22")))
+                {
+                    Check(!capture.Keyboard(0x0101, key, 0) && !capture.Keyboard(0x0105, key, 0) && selected == -2,
+                        "An orphan key release reaches its original application: " + key);
+                    Check(capture.Keyboard(0x0100, key, 0) && capture.Keyboard(0x0100, key, 0),
+                        "The captured press and its auto-repeat stay owned by the ring");
+                    int other = key == 0x31 ? 0x32 : 0x31;
+                    Check(!capture.Keyboard(0x0100, other, 0) && !capture.Keyboard(0x0101, other, 0),
+                        "An overlapping selection key is passed through as a complete press/release pair");
+                    Check(capture.Keyboard(0x0101, key, 0) && selected == (key == 0x1B ? -1 :
+                        key >= 0x61 ? key - 0x61 : key - 0x31), "Only the matching owned release selects or cancels");
+                }
+            }
+            int choices = 0;
+            using (MenuInputCapture capture = new MenuInputCapture(delegate { return -1; }, delegate { },
+                delegate { choices++; }, TriggerBinding.Parse("F22")))
+            {
+                HashSet<int> inherited = (HashSet<int>)typeof(MenuInputCapture).GetField("inheritedKeys",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(capture);
+                inherited.Add(0x31);
+                Check(!capture.Keyboard(0x0100, 0x31, 0) && !capture.Keyboard(0x0101, 0x31, 0) && choices == 0,
+                    "A key held before the ring opened keeps its repeats and release in the original app");
+                Check(capture.Keyboard(0x0100, 0x31, 0) && capture.Keyboard(0x0101, 0x31, 0) && choices == 1,
+                    "The same key can select on its next fresh press");
+            }
+            Console.WriteLine("PASS: keyboard release ownership, inherited keys, overlapping presses and repeats");
+        }
+
+        private static void TestLaunchProcess(string directory)
+        {
+            string target = Path.Combine(directory, "launch-blocked");
+            int completions = 0;
+            Exception failure = null;
+            using (ActionLauncher launcher = new ActionLauncher(new LaunchProcess(1200, "--launch-process-probe"),
+                delegate(Exception error) { failure = error; completions++; }))
+            {
+                launcher.Open(target);
+                PumpUntil(delegate { return completions == 1; }, "A permanently blocked helper reports its deadline", 3000);
+                Check(failure is TimeoutException && !launcher.IsBusy, "A stalled helper times out and releases the launch slot");
+                string started = target + ".started";
+                Check(File.Exists(started), "The isolated timeout probe actually started");
+                int processId = int.Parse(File.ReadAllText(started));
+                bool exited;
+                try { using (Process helper = Process.GetProcessById(processId)) exited = helper.HasExited; }
+                catch (ArgumentException) { exited = true; }
+                Check(exited, "The blocked helper is terminated, not abandoned on a background thread");
+                File.WriteAllText(target + ".release", "release");
+                launcher.Open(Path.Combine(directory, "launch-success"));
+                PumpUntil(delegate { return completions == 2; }, "A fresh launch works after the timeout");
+                Check(failure == null && !File.Exists(target + ".late"), "Recovery cannot resurrect the timed-out launch");
+            }
+            using (ActionLauncher launcher = new ActionLauncher(new LaunchProcess(5000, "--launch-process-probe"),
+                delegate { completions++; }))
+            {
+                string canceled = Path.Combine(directory, "launch-canceled");
+                launcher.Open(canceled);
+                try
+                {
+                    PumpUntil(delegate { return File.Exists(canceled + ".started"); }, "The shutdown helper starts");
+                }
+                finally { launcher.Dispose(); }
+                PumpUntil(delegate { return !launcher.IsBusy; }, "Shutdown terminates the helper without waiting on the UI");
+                File.WriteAllText(canceled + ".release", "release");
+                Pump(20);
+                Check(completions == 2 && !File.Exists(canceled + ".late"), "Shutdown suppresses completion and delayed launches");
+            }
+            using (ActionLauncher launcher = new ActionLauncher(delegate(Exception error) { failure = error; completions++; }))
+            {
+                launcher.Open(Path.Combine(directory, "missing-\u00e9.exe"));
+                PumpUntil(delegate { return completions == 3; }, "The real helper reports a missing Unicode path");
+                Check(failure is FileNotFoundException && failure.Message.Contains("missing-\u00e9.exe"),
+                    "Helper errors preserve their type and Unicode target without opening an application");
+                string script = Path.Combine(directory, "isolated launch.cmd");
+                string marker = Path.Combine(directory, "isolated-launch.txt");
+                File.WriteAllText(script, "@echo helper> \"%~dp0isolated-launch.txt\"\r\n");
+                launcher.Open(script);
+                PumpUntil(delegate { return completions == 4 && File.Exists(marker); },
+                    "The real helper opens a trusted target with spaces through the desktop shell", 3000);
+                Check(failure == null && File.ReadAllText(marker).Trim() == "helper",
+                    "Successful helper completion represents an actual shell launch");
+            }
+            Console.WriteLine("PASS: launch process deadlines, termination, recovery, shutdown and helper error transport");
+        }
+
+        private static void TestInstanceIdentity()
+        {
+            string name = "MD301Plus.Identity.Test." + Guid.NewGuid().ToString("N");
+            string running;
+            int requests = 0;
+            using (SettingsRequestWindow window = new SettingsRequestWindow(name, delegate { requests++; }))
+            {
+                Check(SettingsRequestWindow.Send(name, out running) && running == AppInfo.InstanceIdentity,
+                    "A same-build second launch identifies its running installation");
+                PumpUntil(delegate { return requests == 1; }, "Identity inspection preserves the Settings request");
+            }
+            string other = "Version 1.0.7 (Microsoft Store)\r\nBuild older\r\nC:\\Other\\MD301Plus.exe";
+            using (SettingsRequestWindow window = new SettingsRequestWindow(name, delegate { requests++; }, other))
+            {
+                Check(SettingsRequestWindow.Send(name, out running) && running == other && running != AppInfo.InstanceIdentity,
+                    "A different version/channel/path is reported instead of silently appearing upgraded");
+                PumpUntil(delegate { return requests == 2; }, "A different copy still opens its Settings safely");
+            }
+            using (TestRequestWindow legacy = new TestRequestWindow(name))
+                Check(SettingsRequestWindow.Send(name, out running) && running == null,
+                    "Older copies without an identity marker remain reachable but are explicitly unidentified");
+            Check(!SettingsRequestWindow.Send(name, out running), "Identity and request windows are removed together");
+            using (Process probe = Process.Start(new ProcessStartInfo(typeof(TestRunner).Assembly.Location,
+                "--instance-process-probe " + name) { UseShellExecute = false, CreateNoWindow = true }))
+            {
+                try
+                {
+                    PumpUntil(delegate
+                    {
+                        IntPtr window = Native.FindWindowEx(new IntPtr(-3), IntPtr.Zero, null, name);
+                        return window != IntPtr.Zero && Native.FindWindowEx(window, IntPtr.Zero, null, null) != IntPtr.Zero;
+                    }, "A separate process exposes its running-copy marker", 3000);
+                    Check(SettingsRequestWindow.Send(name, out running) && running == AppInfo.InstanceIdentity,
+                        "Build and installation identity are readable across process boundaries without synchronous messages");
+                    Check(probe.WaitForExit(1500), "The cross-process Settings request reaches its owner");
+                }
+                finally
+                {
+                    if (!probe.HasExited)
+                    {
+                        probe.Kill();
+                        Check(probe.WaitForExit(1000), "A failed identity probe is stopped");
+                    }
+                }
+            }
+            Console.WriteLine("PASS: running-copy identity, mismatched installations and legacy handoff");
+        }
+
+        private sealed class TestRequestWindow : NativeWindow, IDisposable
+        {
+            internal TestRequestWindow(string name)
+            {
+                CreateHandle(new CreateParams { Caption = name, Parent = new IntPtr(-3) });
+            }
+            public void Dispose() { DestroyHandle(); }
+        }
+
+        private static void TestBatteryFailuresAndRollover()
+        {
+            foreach (int error in new[] { 2, 3, 433, 1167 })
+                Check(MouseBatteryReader.ClassifyFailure(error, false) == BatteryRead.Missing,
+                    "Disconnected devices clear the cached path: " + error);
+            Check(MouseBatteryReader.ClassifyFailure(995, true) == BatteryRead.Asleep &&
+                MouseBatteryReader.ClassifyFailure(121, false) == BatteryRead.Asleep,
+                "Device timeouts remain distinct from access and driver failures");
+            foreach (int error in new[] { 5, 6, 31, 995 })
+                Throws<Win32Exception>(delegate { MouseBatteryReader.ClassifyFailure(error, false); },
+                    "Unexpected native failures are reported, not disguised as sleeping: " + error);
+            int now = int.MinValue + 4999, reads = 0;
+            using (MouseBattery battery = new MouseBattery(delegate(out int value)
+            {
+                value = Interlocked.Increment(ref reads);
+                return BatteryRead.Ok;
+            }, false, null, delegate { return now; }))
+            {
+                battery.Refresh();
+                PumpUntil(delegate { return battery.Percent == 1; }, "The first refresh works at the signed uptime boundary");
+                battery.Refresh();
+                Pump(30);
+                Check(reads == 1, "An immediate second refresh is throttled across signed rollover");
+                now = unchecked(now + 5000);
+                battery.Refresh();
+                PumpUntil(delegate { return battery.Percent == 2; }, "Refresh resumes after the interval at long uptime");
+            }
+            Console.WriteLine("PASS: battery native error classification and wrap-safe refresh throttling");
         }
 
         private static void TestStoreLaunchPolicy()

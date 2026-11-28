@@ -395,6 +395,7 @@ namespace MD301Plus
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == LaunchProcess.HelperArgument) return LaunchProcess.RunHelper(args[1]);
             bool openSettings = false, openPreview = false, startup = false;
             foreach (string arg in args)
             {
@@ -416,9 +417,15 @@ namespace MD301Plus
                 {
                     // A sign-in launch must not open Settings over an already running copy.
                     if (startup) return 0;
-                    if (!RequestSettingsFromRunningInstance())
+                    string runningIdentity;
+                    if (!RequestSettingsFromRunningInstance(out runningIdentity))
                         MessageBox.Show("MD301 Plus is already running. Right-click its mouse icon in the notification area to open Settings.",
                             "MD301 Plus");
+                    else if (!string.Equals(runningIdentity, AppInfo.InstanceIdentity, StringComparison.OrdinalIgnoreCase))
+                        MessageBox.Show("Settings opened in the already-running copy, not the copy you just launched.\r\n\r\nRunning:\r\n" +
+                            (runningIdentity ?? "Version and build unavailable (older running copy).") + "\r\n\r\nRequested:\r\n" +
+                            AppInfo.InstanceIdentity + "\r\n\r\nTo switch copies, exit MD301 Plus from its tray menu, then open the intended installation.",
+                            "MD301 Plus - another copy is running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return 0;
                 }
                 try
@@ -457,12 +464,13 @@ namespace MD301Plus
             }
         }
 
-        private static bool RequestSettingsFromRunningInstance()
+        private static bool RequestSettingsFromRunningInstance(out string runningIdentity)
         {
+            runningIdentity = null;
             // The running instance may still be starting (for example at sign-in), so retry briefly.
             for (int attempt = 0; attempt < 20; attempt++)
             {
-                if (SettingsRequestWindow.Send(SettingsRequestWindow.DefaultName)) return true;
+                if (SettingsRequestWindow.Send(SettingsRequestWindow.DefaultName, out runningIdentity)) return true;
                 Thread.Sleep(100);
             }
             return false;

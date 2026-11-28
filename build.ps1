@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$Test,
+    [ValidateSet('All', 'Reliability')]
+    [string]$TestScope = 'All',
     [switch]$Installer,
     [switch]$Package,
     [string]$OutputDirectory = 'bin',
@@ -66,7 +68,9 @@ if ($Test) {
         throw 'Test compilation failed.'
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'src\MD301Plus.exe.config') -Destination ($testExe + '.config')
-    & $testExe
+    $testArguments = @()
+    if ($TestScope -eq 'Reliability') { $testArguments = @('--reliability') }
+    & $testExe @testArguments
     if ($LASTEXITCODE -ne 0) {
         throw 'Tests failed.'
     }

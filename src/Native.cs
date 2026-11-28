@@ -134,6 +134,9 @@ namespace MD301Plus
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         internal static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr window, StringBuilder text, int capacity);
+
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
@@ -472,17 +475,41 @@ namespace MD301Plus
         internal const string DefaultName = "MD301Plus.SettingsRequest";
         private const int RequestMessage = 0x8001;
         private readonly Action requested;
+        private readonly NativeWindow identity = new NativeWindow();
 
-        internal SettingsRequestWindow(string name, Action requested)
+        internal SettingsRequestWindow(string name, Action requested, string instanceIdentity = null)
         {
             this.requested = requested;
             CreateHandle(new CreateParams { Caption = name, Parent = new IntPtr(-3) });
+            try
+            {
+                identity.CreateHandle(new CreateParams
+                {
+                    Caption = instanceIdentity ?? AppInfo.InstanceIdentity, Parent = Handle, Style = 0x40000000
+                });
+            }
+            catch
+            {
+                DestroyHandle();
+                throw;
+            }
         }
 
         internal static bool Send(string name)
         {
+            string runningIdentity;
+            return Send(name, out runningIdentity);
+        }
+
+        internal static bool Send(string name, out string runningIdentity)
+        {
+            runningIdentity = null;
             IntPtr window = Native.FindWindowEx(new IntPtr(-3), IntPtr.Zero, null, name);
             if (window == IntPtr.Zero) return false;
+            IntPtr child = Native.FindWindowEx(window, IntPtr.Zero, null, null);
+            StringBuilder text = new StringBuilder(4096);
+            if (child != IntPtr.Zero && Native.GetWindowText(child, text, text.Capacity) > 0)
+                runningIdentity = text.ToString();
             uint process;
             // The launching process may pass its foreground permission so Settings appears in front.
             if (Native.GetWindowThreadProcessId(window, out process) != 0) Native.AllowSetForegroundWindow(process);
@@ -501,6 +528,7 @@ namespace MD301Plus
 
         public void Dispose()
         {
+            if (identity.Handle != IntPtr.Zero) identity.DestroyHandle();
             if (Handle != IntPtr.Zero) DestroyHandle();
         }
     }
@@ -522,6 +550,7 @@ namespace MD301Plus
         private int pendingButton;
         private int pendingAction = -1;
         private int pendingKey;
+        private readonly HashSet<int> inheritedKeys = new HashSet<int>();
         private volatile bool completed;
         private volatile bool disposed;
         private volatile bool bypassed;
@@ -550,6 +579,9 @@ namespace MD301Plus
                 mouseHook = Native.SetWindowsHookEx(14, mouseCallback, module, 0);
                 if (mouseHook == IntPtr.Zero)
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot listen for menu clicks.");
+                for (int key = 0x31; key <= 0x38; key++) RememberHeldKey(key);
+                for (int key = 0x61; key <= 0x68; key++) RememberHeldKey(key);
+                RememberHeldKey(0x1B);
                 keyboardHook = Native.SetWindowsHookEx(13, keyboardCallback, module, 0);
                 if (keyboardHook == IntPtr.Zero)
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot listen for Escape and action numbers.");
@@ -635,10 +667,21 @@ namespace MD301Plus
             return Native.CallNextHookEx(keyboardHook, code, message, data);
         }
 
-        private bool Keyboard(int kind, int key, uint modifiers)
+        private void RememberHeldKey(int key)
+        {
+            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) inheritedKeys.Add(key);
+        }
+
+        internal bool Keyboard(int kind, int key, uint modifiers)
         {
             bool down = kind == 0x0100 || kind == 0x0104;
             bool up = kind == 0x0101 || kind == 0x0105;
+            if (!down && !up) return false;
+            if (inheritedKeys.Contains(key))
+            {
+                if (up) inheritedKeys.Remove(key);
+                return false;
+            }
             if (IsTriggerEvent(trigger.Keyboard, key, modifiers)) return false;
             int index = key >= 0x31 && key <= 0x38 ? key - 0x31 :
                 (key >= 0x61 && key <= 0x68 ? key - 0x61 : -1);
@@ -646,8 +689,8 @@ namespace MD301Plus
             {
                 if (down && pendingKey == 0)
                     pendingKey = key;
-                if (up && pendingKey == key)
-                    Finish(index);
+                if (pendingKey != key) return false;
+                if (up) Finish(index);
                 return true;
             }
             if (down && !IsModifier(key))
@@ -694,6 +737,12 @@ namespace MD301Plus
             if (keyboardHook != IntPtr.Zero && !Native.UnhookWindowsHookEx(keyboardHook))
                 AppLog.Error("Releasing the menu keyboard listener", new Win32Exception(Marshal.GetLastWin32Error()));
             mouseHook = keyboardHook = IntPtr.Zero;
+        }
+
+        internal void WhenStopped(Action<bool> callback)
+        {
+            if (worker == null) callback(true);
+            else worker.WhenStopped(callback);
         }
 
         public void Dispose()

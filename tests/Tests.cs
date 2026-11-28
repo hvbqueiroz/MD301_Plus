@@ -65,6 +65,25 @@ namespace MD301Plus.Tests
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == LaunchProcess.HelperArgument) return LaunchProcess.RunHelper(args[1]);
+            if (args.Length == 2 && args[0] == "--instance-process-probe")
+            {
+                using (SettingsRequestWindow window = new SettingsRequestWindow(args[1], Application.ExitThread))
+                    Application.Run();
+                return 0;
+            }
+            if (args.Length == 2 && args[0] == "--launch-process-probe")
+            {
+                string target = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+                if (Path.GetFileName(target) != "launch-success")
+                {
+                    File.WriteAllText(target + ".started", Process.GetCurrentProcess().Id.ToString());
+                    while (!File.Exists(target + ".release")) Thread.Sleep(10);
+                    File.WriteAllText(target + ".late", "unexpected late launch");
+                }
+                Console.WriteLine("OK");
+                return 0;
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (args.Length == 1 && args[0] == "--media-probe")
@@ -72,9 +91,10 @@ namespace MD301Plus.Tests
                 using (MediaProbeForm probe = new MediaProbeForm()) Application.Run(probe);
                 return 0;
             }
-            if (args.Length != 0)
+            bool reliabilityOnly = args.Length == 1 && args[0] == "--reliability";
+            if (args.Length != 0 && !reliabilityOnly)
             {
-                Console.Error.WriteLine("Unknown test-runner arguments.");
+                Console.Error.WriteLine("Unknown test-runner arguments: " + string.Join(", ", args));
                 return 2;
             }
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-data-" + Guid.NewGuid().ToString("N"));
@@ -82,6 +102,18 @@ namespace MD301Plus.Tests
             AppLog.FilePath = Path.Combine(directory, "app.log");
             try
             {
+                if (reliabilityOnly)
+                {
+                    TestStability(directory);
+                    TestMouseBindings();
+                    TestNativeMediaDelivery();
+                    TestNativeWindows();
+                    TestShellLauncher(directory);
+                    TestApplicationSettings(directory);
+                    TestWindowsShutdown(directory);
+                    Console.WriteLine("PASS: " + assertions + " reliability assertions.");
+                    return 0;
+                }
                 TestShortcuts();
                 TestApplicationIcon();
                 TestVersion();
@@ -1422,10 +1454,10 @@ namespace MD301Plus.Tests
             }
         }
 
-        private static void PumpUntil(Func<bool> done, string message)
+        private static void PumpUntil(Func<bool> done, string message, int timeoutMs = 1500)
         {
             Stopwatch timeout = Stopwatch.StartNew();
-            while (!done() && timeout.ElapsedMilliseconds < 1500)
+            while (!done() && timeout.ElapsedMilliseconds < timeoutMs)
             {
                 Application.DoEvents();
                 Thread.Sleep(1);
